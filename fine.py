@@ -1,13 +1,5 @@
-# import os
-# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-
 import transformers
-import jax
-import jax.numpy as jnp
 import numpy as np
-import optax
-
-# jax.config.update('jax_compiler_enable_remat_pass', False)
 
 # model_name = "EleutherAI/gpt-neo-125m"
 # model_name = "EleutherAI/gpt-neo-1.3B"
@@ -17,21 +9,24 @@ import optax
 # model_name = "YALCINKAYA/opsgenius_j" # quantization of above
 # model_name = "Qwen/Qwen3-4b-Base" # not flax transformers
 # model_name = "google-bert/bert-base-cased"
+model_name = "google/gemma-2b"
+# model_name = "google/gemma-2-2b"
 
-config = transformers.AutoConfig.from_pretrained(model_name)
-# model = transformers.FlaxAutoModelForCausalLM.from_config(config)
-model = transformers.FlaxAutoModelForCausalLM.from_pretrained(model_name)
+model = transformers.AutoModelForCausalLM.from_pretrained(model_name,torch_dtype="auto",device_map="auto")
 tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
 
-model_inputs = tokenizer(["The current president of the US is"]*1, return_tensors="np")
+text = "The current president of the US is"
+model_inputs = tokenizer([text]*20, return_tensors="pt").to(model.device)
 generated_ids = model.generate(
     **model_inputs,
-    max_new_tokens=5,
-    # do_sample = True,
-    # num_beams = 1
+    max_new_tokens=100,
+    do_sample = True,
+    num_beams = 1
 )
-generated_ids = np.array(generated_ids.sequences)
+# generated_ids = np.array(generated_ids.sequences)
 response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+
+
 
 # from datasets import load_dataset
 # dataset = load_dataset("yelp_review_full")
@@ -69,5 +64,3 @@ response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
 #     compute_metrics=compute_metrics,
 # )
 # trainer.train()
-
-
