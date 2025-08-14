@@ -1,77 +1,46 @@
-
 from transformers import AutoModelForCausalLM, TrainingArguments, Trainer, AutoTokenizer
 import torch
 import datasets
+import numpy as np
 
 from functools import partial
 import time
 
 MODEL_NAME = "google/gemma-2b"
-DATASET = 'hackathon-pln-es/spanish-to-quechua'
-SEQ_LEN = 20
+SEQ_LEN = 540
 OUT_DIR = 'data'
-
-class LoRALayer(torch.nn.Module):
-    def __init__(self, in_dim, out_dim, rank, alpha):
-        super().__init__()
-        std_dev = 1 / torch.sqrt(torch.tensor(rank).float())
-        self.A = torch.nn.Parameter(torch.randn(in_dim, rank) * std_dev)
-        self.B = torch.nn.Parameter(torch.zeros(rank, out_dim))
-        self.alpha = alpha
-
-    def forward(self, x):
-        x = self.alpha * (x @ self.A @ self.B)
-        return x
 
 class LinearWithLoRA(torch.nn.Module):
     def __init__(self, linear, rank, alpha):
         super().__init__()
         self.linear = linear
-        self.lora = LoRALayer(
-            linear.in_features, linear.out_features, rank, alpha
-        )
+        std_dev = 1 / np.sqrt(rank)
+        self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = torch.bfloat16) * std_dev)
+        self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = torch.bfloat16 ))
 
     def forward(self, x):
-        return self.linear(x) + self.lora(x)
-    
+        return self.linear(x) + 16 * x @ self.A @ self.B
 
 def get_lora_model(model):
-    # default hyperparameter choices
-    lora_r = 8
-    lora_alpha = 16
-    lora_dropout = 0.05
-    lora_query = True
-    lora_key = True
-    lora_value = True
-    lora_projection = True
-    lora_mlp = False
-    lora_head = False
-  
-    assign_lora = partial(LinearWithLoRA, rank=lora_r, alpha=lora_alpha)
+    assign_lora = partial(LinearWithLoRA, rank=8, alpha=16)
 
     for param in model.parameters():
         param.requires_grad = False
 
     for layer in model.model.layers:
-        if lora_query:
-            layer.self_attn.q_proj = assign_lora(layer.self_attn.q_proj)
-        if lora_key:
-            layer.self_attn.k_proj = assign_lora(layer.self_attn.k_proj)
-        if lora_value:
-            layer.self_attn.v_proj = assign_lora(layer.self_attn.v_proj)
-        if lora_projection:
-            layer.self_attn.o_proj = assign_lora(layer.self_attn.o_proj)
-        # if lora_mlp:
-        #     layer.fc1 = assign_lora(layer.fc1)
-        #     layer.fc2 = assign_lora(layer.fc2)
-
-    if lora_head:
-        model.model.lm_head = assign_lora(model.model.lm_head)
+        layer.self_attn.q_proj = assign_lora(layer.self_attn.q_proj)
+        layer.self_attn.k_proj = assign_lora(layer.self_attn.k_proj)
+        layer.self_attn.v_proj = assign_lora(layer.self_attn.v_proj)
+        layer.self_attn.o_proj = assign_lora(layer.self_attn.o_proj)
+        layer.mlp.gate_proj = assign_lora(layer.mlp.gate_proj)
+        layer.mlp.up_proj = assign_lora(layer.mlp.up_proj)
+        layer.mlp.down_proj = assign_lora(layer.mlp.down_proj)
+    # model.lm_head = assign_lora(model.lm_head)
 
     return model
 
 def train_lora():
-    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
+    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, torch_dtype='auto')
     print(model)
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in model : {model_params}")
@@ -81,90 +50,85 @@ def train_lora():
     lora_model_params = sum(p.numel() for p in lora_model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in lora model : {lora_model_params} and are {(lora_model_params/model_params)*100} % of the original model")
     
-    lm_dataset = getDataset()
-    train(lora_model, lm_dataset, OUT_DIR)
+    dataset = get_dataset_gsm8k()
+    train(lora_model, dataset, OUT_DIR)
     
+class ModelWithLoss(torch.nn.Module): 
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.loss = torch.nn.CrossEntropyLoss()
+
+    def forward(self, *, input_ids=None, attention_mask=None ):
+        result = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        result.loss = self.loss( result['logits'].view(-1, result['logits'].shape[-1]) , input_ids.view(-1) )
+        # print(result)
+        return (result.loss,)
+        return result
 
 def train(model, lm_dataset, output_dir):
+    model = ModelWithLoss(model)
     
     training_args = TrainingArguments(
         output_dir=output_dir,
         eval_strategy="epoch",
         learning_rate=2e-5,
         weight_decay=0.01,
-        torch_compile=True,
-        eval_on_start=True,
-        save_steps=10000
+        # torch_compile=True,
+        save_steps=100000,
+        per_device_train_batch_size = 1,
+        per_device_eval_batch_size = 1,
+        save_safetensors = False # work around bug 
     )
 
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=lm_dataset["train"],
-        eval_dataset=lm_dataset["validation"],
+        eval_dataset=lm_dataset["test"],
         # data_collator=data_collator,
     )
 
     st = time.time()
     trainer.train()
     et = time.time()
-
     print(f"total training time : {(et - st)} sec.")
+    return trainer
 
 
-def getDataset():
-    print(f'\nin getDataset')
+def get_dataset_gsm8k():
     from datasets import load_dataset
-    data = load_dataset(DATASET)
+    data = load_dataset('openai/gsm8k', 'main')
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-
-    print(data)
 
     #split data
     # data = data["train"].train_test_split(test_size=.2, seed=1)
-
-    def preprocess(data_row, tokenizer):
-        return tokenizer(data_row['qu'])
-
-    data = data.map( preprocess,
-                    # batched = True,
-                    # num_proc = 4,
-                    fn_kwargs = {'tokenizer' : tokenizer},
-                    remove_columns = data['train'].column_names
-                    )
     
-    def group_texts(examples, block_size):
-        # Concatenate all texts.
-        concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
-        total_length = len(concatenated_examples[list(examples.keys())[0]])
-        # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
-        # customize this part to your needs.
+    def preprocess(batch):
+        def format_question(ex):
+            return f"Q: {ex}\nA: "
 
-        # if total_length >= block_size:
-        total_length = (total_length // block_size) * block_size
-        
-        # Split by chunks of block_size.
-        result = {
-            k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
-            for k, t in concatenated_examples.items()
+        def format_answer(ex):
+            # this is what helm does
+            answer_text = ex.replace("####", "The answer is").replace("\n", " ") + "."
+            return f"{answer_text}\n{tokenizer.eos_token}"
+
+        sources = [format_question(question) for question in batch['question']]
+        targets = [format_answer(answer) for answer in batch['answer']]
+
+        examples = [s + t for s, t in zip(sources, targets)]
+        sources_tokenized = tokenizer(sources, return_tensors="np", padding=False, truncation=True, max_length=SEQ_LEN)
+        examples_tokenized = tokenizer(examples, return_tensors="np", padding=False, truncation=True, max_length=SEQ_LEN)
+
+        source_lens = [len(s) for s in sources_tokenized["input_ids"]]
+
+        return {
+            "input_ids": examples_tokenized["input_ids"],
+            "source_lens": source_lens,
         }
-
-        # labels because the model expects the argument to be named labels
-        result["labels"] = result["input_ids"].copy()
-        # del result['input_ids']
-        return result
-
-
-    lm_dataset = data.map(group_texts, 
-                        batched=True,
-                        num_proc=4,
-                        fn_kwargs = {'block_size' : SEQ_LEN })
     
-    print(lm_dataset['train'])
-    print(lm_dataset['train'][0])
-
-    return lm_dataset
-
+    return data.map(preprocess, batched=True)
 
 if __name__ == '__main__':
-    train_lora()
+    trainer = train_lora()
+
