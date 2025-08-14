@@ -22,6 +22,22 @@ let
     build-system = with pythonPackages; [ setuptools-scm ];
     propagatedBuildInputs = with pythonPackages; [ jaxtyping chex onnx ];
   };
+  torch2jax = let
+    pname = "torch2jax";
+    rev = "814b35ff9fa1b6be93bf07a14a4dd6f2bf50685f";
+  in pythonPackages.buildPythonPackage {
+    inherit pname;
+    version = rev;
+    src = pkgs.fetchFromGitHub {
+      owner = "samuela";
+      repo = pname;
+      inherit rev;
+      sha256 = "sha256-Ekk0Vh3f5ksxII04Wkd5YcLHP07zXeQqnjxZgGbWqWY=";
+    };
+    pyproject = true;
+    build-system = with pythonPackages; [ setuptools ];
+    propagatedBuildInputs = with pythonPackages; [ torch jax ];
+  };
 in
 pkgs.mkShell {
   buildInputs = with pythonPackages; [
@@ -32,7 +48,8 @@ pkgs.mkShell {
     equinox
     jaxtyping
     chex
-    jaxonnxruntime
+    # jaxonnxruntime
+    torch2jax
       
     datasets
     # evaluate
@@ -40,7 +57,7 @@ pkgs.mkShell {
       
     # accelerate
     # transformers
-    # torch
+    torch
 
     # jax2onnx
       
