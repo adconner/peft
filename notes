@@ -1,0 +1,16 @@
+cross cutting parameters
+  projection of all layers as a tensor
+state handling jit
+automatic migration from linen to nnx
+freezing subset of parameters
+
+DORA generalize: QR, or polar decomposition
+VERA is tensor rank decomposition followed by rescalings on particular groupings of factors, can rescale on all groupings
+can make tensor implicitly restricted from in VERA trainable also
+
+large contexts makes ai worse, better position encoding, hierarchical? sort of dynamic tokenization with hierarchical attention
+dynamic position encoding, like lc0
+
+chess:
+transformer lc0 can also consume search tree descendants, dynamic puct
+

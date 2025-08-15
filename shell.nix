@@ -6,34 +6,35 @@ let
     # config.cudaSupport = true;
   };
   pythonPackages = pkgs.python3Packages;
-  jaxonnxruntime = let
-    pname = "jaxonnxruntime";
-    rev = "a1650c26b393e58b780371c030f9290247cf6cc5";
-  in pythonPackages.buildPythonPackage {
-    inherit pname;
-    version = rev;
-    src = pkgs.fetchFromGitHub {
-      owner = "google";
-      repo = pname;
-      inherit rev;
-      sha256 = "sha256-aLl5RM63pp4R+0edL8NwmEcbD0j1OfGzniYw8jIpyK4=";
-    };
-    pyproject = true;
-    build-system = with pythonPackages; [ setuptools-scm ];
-    propagatedBuildInputs = with pythonPackages; [ jaxtyping chex onnx ];
-  };
+  # jaxonnxruntime = let
+  #   pname = "jaxonnxruntime";
+  #   rev = "a1650c26b393e58b780371c030f9290247cf6cc5";
+  # in pythonPackages.buildPythonPackage {
+  #   inherit pname;
+  #   version = rev;
+  #   src = pkgs.fetchFromGitHub {
+  #     owner = "google";
+  #     repo = pname;
+  #     inherit rev;
+  #     sha256 = "sha256-aLl5RM63pp4R+0edL8NwmEcbD0j1OfGzniYw8jIpyK4=";
+  #   };
+  #   pyproject = true;
+  #   build-system = with pythonPackages; [ setuptools-scm ];
+  #   propagatedBuildInputs = with pythonPackages; [ jaxtyping chex onnx ];
+  # };
   torch2jax = let
     pname = "torch2jax";
     rev = "814b35ff9fa1b6be93bf07a14a4dd6f2bf50685f";
   in pythonPackages.buildPythonPackage {
     inherit pname;
     version = rev;
-    src = pkgs.fetchFromGitHub {
-      owner = "samuela";
-      repo = pname;
-      inherit rev;
-      sha256 = "sha256-Ekk0Vh3f5ksxII04Wkd5YcLHP07zXeQqnjxZgGbWqWY=";
-    };
+    src = ../torch2jax;
+    # src = pkgs.fetchFromGitHub {
+    #   owner = "samuela";
+    #   repo = pname;
+    #   inherit rev;
+    #   sha256 = "sha256-Ekk0Vh3f5ksxII04Wkd5YcLHP07zXeQqnjxZgGbWqWY=";
+    # };
     pyproject = true;
     build-system = with pythonPackages; [ setuptools ];
     propagatedBuildInputs = with pythonPackages; [ torch jax ];
@@ -44,11 +45,9 @@ pkgs.mkShell {
     jax-cuda12-plugin
     jax
     optax
-    optimistix
     equinox
     jaxtyping
     chex
-    # jaxonnxruntime
     torch2jax
       
     datasets
@@ -56,10 +55,8 @@ pkgs.mkShell {
     # scikit-learn
       
     # accelerate
-    # transformers
+    transformers
     torch
-
-    # jax2onnx
       
     ipython
     # venvShellHook
