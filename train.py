@@ -9,7 +9,7 @@ import time
 MODEL_NAME = "google/gemma-2b"
 SEQ_LEN = 540
 OUT_DIR = 'data'
-
+    
 class LinearWithLoRA(torch.nn.Module):
     def __init__(self, linear, rank, alpha):
         super().__init__()
@@ -40,6 +40,7 @@ def get_lora_model(model):
     return model
 
 def train_lora():
+    # model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
     model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, torch_dtype='auto')
     print(model)
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -50,24 +51,11 @@ def train_lora():
     lora_model_params = sum(p.numel() for p in lora_model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in lora model : {lora_model_params} and are {(lora_model_params/model_params)*100} % of the original model")
     
+    # dataset = getDataset()
     dataset = get_dataset_gsm8k()
     train(lora_model, dataset, OUT_DIR)
     
-class ModelWithLoss(torch.nn.Module): 
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-        self.loss = torch.nn.CrossEntropyLoss()
-
-    def forward(self, *, input_ids=None, attention_mask=None ):
-        result = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        result.loss = self.loss( result['logits'].view(-1, result['logits'].shape[-1]) , input_ids.view(-1) )
-        # print(result)
-        return (result.loss,)
-        return result
-
 def train(model, lm_dataset, output_dir):
-    model = ModelWithLoss(model)
     
     training_args = TrainingArguments(
         output_dir=output_dir,
@@ -78,7 +66,8 @@ def train(model, lm_dataset, output_dir):
         save_steps=100000,
         per_device_train_batch_size = 1,
         per_device_eval_batch_size = 1,
-        save_safetensors = False # work around bug 
+        save_safetensors = False, # work around bug 
+        # bf16=True
     )
 
     trainer = Trainer(
@@ -119,11 +108,14 @@ def get_dataset_gsm8k():
         examples = [s + t for s, t in zip(sources, targets)]
         sources_tokenized = tokenizer(sources, return_tensors="np", padding=False, truncation=True, max_length=SEQ_LEN)
         examples_tokenized = tokenizer(examples, return_tensors="np", padding=False, truncation=True, max_length=SEQ_LEN)
+        # examples_tokenized = tokenizer(examples, return_tensors="np", padding='max_length', truncation=True, max_length=SEQ_LEN)
 
         source_lens = [len(s) for s in sources_tokenized["input_ids"]]
 
         return {
             "input_ids": examples_tokenized["input_ids"],
+            "labels": examples_tokenized["input_ids"],
+            # "attention_mask": torch.ones(examples_tokenized["input_ids"].shape),
             "source_lens": source_lens,
         }
     
@@ -131,4 +123,3 @@ def get_dataset_gsm8k():
 
 if __name__ == '__main__':
     trainer = train_lora()
-
