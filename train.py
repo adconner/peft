@@ -14,7 +14,7 @@ from tqdm import tqdm
 import peft
 
 MODEL_NAME = "google/gemma-2b"
-SEQ_LEN = 200
+SEQ_LEN = 540
 OUT_DIR = 'data'
 
 def train_lora():
@@ -74,7 +74,7 @@ def train(model, lm_dataset, output_dir):
 
 def train_jax(model_torch, lm_dataset, output_dir):
     epochs = 3
-    batchsize = 4
+    batchsize = 1
     seed = 0
     logging_steps = 500//batchsize
 
@@ -88,23 +88,45 @@ def train_jax(model_torch, lm_dataset, output_dir):
     model = t2j(model_torch)
     del model_torch
     
-    
-    seq_lens = [SEQ_LEN]
-    # seq_lens = [SEQ_LEN//2, SEQ_LEN]
     def get_batches(key, split='train'):
         from itertools import batched
         split = list(lm_dataset[split])
-        for batch in batched(jax.random.permutation(key, len(split)), batchsize):
-            batch = [split[i] for i in batch]
-            maxlen = max([len(b['input_ids']) for b in batch])
-            seq_len = next(l for l in seq_lens if l >= maxlen)
-            input_ids = np.zeros((len(batch), seq_len), dtype=jnp.int32)
-            id_mask = np.zeros((len(batch), seq_len), dtype=jnp.bool)
-            for i,b in enumerate(batch):
-                ids = b['input_ids']
-                input_ids[i, :len(ids)] = ids
-                id_mask[i, :len(ids)] = True
-            yield (input_ids, id_mask)
+        # vram usage goes as B*len^2, for B the batch size and len the sequence length
+        # group examples by biggest B so that len <= maxex/sqrt(B)
+        lens = [len(ex['input_ids']) for ex in split]
+        maxex = max(lens)
+        minex = min(lens)
+        # maxb = int(np.floor((maxex/minex) ** 2))
+        # bs = []
+        # b = 1
+        # while b <= maxb:
+        #     bs.append(b)
+        #     b *= 2
+        bs = [1,2,4,8]
+        split_by_b = { }
+        for ex in split:
+            b = next(b for b in reversed(bs) if len(ex['input_ids']) <= maxex/np.sqrt(b))
+            split_by_b.setdefault(b,[]).append(ex)
+        print(f'{len(split_by_b)} groups of batches by example length')
+        print(sorted([(b,len(exs),int(np.floor(maxex/np.sqrt(b)))) for b, exs in split_by_b.items()])) 
+        batches = []
+        key, keycur = jax.random.split(key)
+        for (b, exs), keycur in zip(sorted(split_by_b.items()),jax.random.split(keycur,len(split_by_b))):
+            seq_len = int(np.floor(maxex / np.sqrt(b)))
+            # b = max(b-1,1)
+            b *= batchsize
+            ixs = jax.random.permutation(keycur, len(exs))
+            for batch in batched(ixs, b):
+                batch = [exs[i] for i in batch]
+                input_ids = np.zeros((b, seq_len), dtype=jnp.int32)
+                id_mask = np.zeros((b, seq_len), dtype=jnp.bool)
+                for i,ex in enumerate(batch):
+                    ids = ex['input_ids']
+                    input_ids[i, :len(ids)] = ids
+                    id_mask[i, :len(ids)] = True
+                batches.append((input_ids, id_mask))
+        ixs = jax.random.permutation(key,len(batches))
+        return [batches[i] for i in ixs]
             
     @jax.jit
     def loss_fn(trainable_state_dict,nontrainable_state_dict,input_ids,id_mask):
@@ -124,25 +146,27 @@ def train_jax(model_torch, lm_dataset, output_dir):
         trainable_state_dict = optax.apply_updates(trainable_state_dict, updates)
         return loss, trainable_state_dict, opt_state
 
+    test_batches = get_batches(jax.random.key(0), split='test')
     def evaluate(trainable_state_dict, nontrainable_state_dict):
-        total = (len(lm_dataset['test'])-1) // batchsize + 1
         loss = jax.array(0.0)
-        for batch in tqdm(get_batches(jax.random.key(0), split='test'), total=total):
+        num = 0
+        for batch in tqdm(test_batches):
             loss += loss_fn(trainable_state_dict, nontrainable_state_dict, *batch)
-        return loss / total
+            num += 1
+        return loss / num
     
     start_learning_rate = 5e-7
     # optimizer = optax.adam(start_learning_rate)
     optimizer = optax.adamw(start_learning_rate)
     opt_state = optimizer.init(trainable_state_dict)
 
-    epoch_its = (len(lm_dataset['train'])-1) // batchsize + 1
-    total = epoch_its * epochs
-    for it,batch in tqdm(enumerate(itertools.chain(*map(get_batches, jax.random.split(key, epochs)))), total=total):
+    batches = [batch for key in jax.random.split(key, epochs) for batch in get_batches(key)]
+    epoch_its = len(batches) // epochs
+    for it,batch in tqdm(enumerate(batches),total=len(batches)):
         loss, trainable_state_dict, opt_state = update_function(trainable_state_dict, opt_state, nontrainable_state_dict, *batch)
-        if it % logging_steps == logging_steps-1 or it == total-1:
+        if it % logging_steps == logging_steps-1 or it == len(batches)-1:
             print({'loss' : loss, 'epoch' : it / epoch_its, 'learning_rate' : None, 'grad_norm' : None})
-        if it % epoch_its == epoch_its-1 or it == total-1:
+        if it % epoch_its == epoch_its-1 or it == len(batches)-1:
             evaluate()
             
     return trainable_state_dict
