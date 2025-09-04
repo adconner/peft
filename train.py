@@ -76,7 +76,10 @@ def train_jax(model_torch, lm_dataset, output_dir):
     epochs = 3
     batchsize = 1
     seed = 0
-    logging_steps = 500//batchsize
+    logging_steps = 100
+    start_learning_rate = 0.1
+    # start_learning_rate = 5e-6
+    # weight_decay = 0.01
 
     key = jax.random.key(seed)
     
@@ -131,9 +134,11 @@ def train_jax(model_torch, lm_dataset, output_dir):
     @jax.jit
     def loss_fn(trainable_state_dict,nontrainable_state_dict,input_ids,id_mask):
         result = model(input_ids, state_dict = dict(nontrainable_state_dict, **trainable_state_dict))
-        logits = result.logits[...,:-1,:]
-        id_mask = id_mask[...,1:]
-        labels = input_ids[...,1:]
+        logits = result.logits
+        labels = input_ids
+        # logits = result.logits[...,:-1,:]
+        # id_mask = id_mask[...,1:]
+        # labels = input_ids[...,1:]
         cross_entropy = optax.losses.softmax_cross_entropy_with_integer_labels(
                 logits.reshape(-1, logits.shape[-1]), labels.reshape(-1),
                 )
@@ -158,19 +163,19 @@ def train_jax(model_torch, lm_dataset, output_dir):
     batches = [batch for key in jax.random.split(key, epochs) for batch in get_batches(key)]
     epoch_its = len(batches) // epochs
     
-    start_learning_rate = 5e-7
-    # optimizer = optax.adam(start_learning_rate)
     schedule = optax.schedules.cosine_decay_schedule(start_learning_rate, decay_steps=len(batches))
-    optimizer = optax.adamw(schedule)
+    optimizer = optax.adam(start_learning_rate)
+    # optimizer = optax.adamw(schedule)
+    # optimizer = optax.adamw(schedule,weight_decay=weight_decay)
     opt_state = optimizer.init(trainable_state_dict)
 
     for it,batch in tqdm(enumerate(batches),total=len(batches)):
         loss, trainable_state_dict, opt_state = update_function(trainable_state_dict, opt_state, nontrainable_state_dict, *batch)
         if it % logging_steps == logging_steps-1 or it == len(batches)-1:
-            print({'loss' : loss, 'epoch' : it / epoch_its, 'learning_rate' : None, 'grad_norm' : None})
+            print({'loss' : float(loss), 'epoch' : it / epoch_its, 'learning_rate' : float(schedule(it)), 'grad_norm' : None})
         if it % epoch_its == epoch_its-1 or it == len(batches)-1:
             eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
-            print(f'eval_loss = {eval_loss}')
+            print(f'eval_loss = {float(eval_loss)}')
             
     return trainable_state_dict
 
