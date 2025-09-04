@@ -4,6 +4,8 @@ import torch
 import jax
 import jax.numpy as jnp
 import numpy as np
+from tqdm import tqdm
+import functools
 
 # model_name = "EleutherAI/gpt-neo-125m"
 # model_name = "EleutherAI/gpt-neo-1.3B"
@@ -23,21 +25,26 @@ model = transformers.AutoModelForCausalLM.from_pretrained(model_name,torch_dtype
 # torch_inputs = tokenizer([text]*1, return_tensors="pt")
 
 B = 1
-seq = 500
-torch_inputs = { 'input_ids' : torch.randint(high=256000, size=(B, seq)),
-                'attention_mask' : torch.ones((B,seq)) }
+seq = 300
 
-res1 = model.to('cuda')(**{k: v.to('cuda') for k,v in torch_inputs.items()})
+# model=model.to('cuda')
+# for i in tqdm(range(1000)):
+#     torch_inputs = { 'input_ids' : torch.randint(high=256000, size=(B, seq)).to('cuda') }
+#     res1 = model(**{k: v.to('cuda') for k,v in torch_inputs.items()})
 
-# from torch2jax import t2j
-# jax_inputs = {k: t2j(v) for k,v in torch_inputs.items()}
-# state_dict = {k: t2j(v) for k,v in model.state_dict().items()}
-# modelf = t2j(model)
-# def logits(*args,state_dict=None):
-#     res = modelf(*args, state_dict=state_dict)
-#     return res.logits
-# res = jax.jit(logits,backend='gpu')(*[jax_inputs[k] for k in ['input_ids', 'attention_mask']],state_dict=state_dict)
-# print(res)
+from torch2jax import t2j
+state_dict = {k: jax.device_put(t2j(v),jax.devices()[0]) for k,v in model.state_dict().items()}
+modelf = t2j(model)
+@jax.jit 
+def logits(input_ids,state_dict):
+    res = modelf(input_ids, state_dict=state_dict)
+    return res.logits
+key = jax.random.key(0)
+for i in tqdm(range(1000)):
+    curkey, key = jax.random.split(key)
+    input_ids = jax.random.randint(curkey, (B,seq), 0, 256000)
+    # input_ids = t2j(torch.randint(high=256000, size=(B, seq))).copy()
+    res = logits(input_ids,state_dict)
 
 # generated_ids = model.generate(
 #     **jax_inputs,

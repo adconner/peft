@@ -2,28 +2,35 @@ from transformers import AutoModelForCausalLM, TrainingArguments, Trainer, AutoT
 import torch
 import datasets
 import numpy as np
+import jax
+import jax.numpy as jnp
+import optax
+from torch2jax import t2j
+import tqdm
+import itertools
+import functools
+from tqdm import tqdm
 
 import peft
 
 MODEL_NAME = "google/gemma-2b"
-SEQ_LEN = 350
+SEQ_LEN = 200
 OUT_DIR = 'data'
 
 def train_lora():
     # model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
     model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, torch_dtype='auto')
-    print(model)
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in model : {model_params}")
 
     lora_model = peft.get_lora_model(model)
-    print(lora_model)
+    # lora_model = model
     lora_model_params = sum(p.numel() for p in lora_model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in lora model : {lora_model_params} and are {(lora_model_params/model_params)*100} % of the original model")
     
     # dataset = getDataset()
     dataset = get_dataset_gsm8k()
-    train(lora_model, dataset, OUT_DIR)
+    train_jax(lora_model, dataset, OUT_DIR)
     
 class ModelWithLoss(torch.nn.Module): 
     def __init__(self, model):
@@ -41,11 +48,10 @@ class ModelWithLoss(torch.nn.Module):
     
 def train(model, lm_dataset, output_dir):
     # model = ModelWithLoss(model)
-    
     training_args = TrainingArguments(
         output_dir=output_dir,
         eval_strategy="epoch",
-        learning_rate=2e-5,
+        learning_rate=2.5e-6/4,
         weight_decay=0.01,
         # torch_compile=True,
         save_strategy='no',
@@ -53,10 +59,9 @@ def train(model, lm_dataset, output_dir):
         per_device_eval_batch_size = 1,
         save_safetensors = False, # work around bug 
         # bf16=True,
-        gradient_accumulation_steps=8,
-        logging_steps=50
+        gradient_accumulation_steps=1,
+        logging_steps=500
     )
-
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -64,9 +69,83 @@ def train(model, lm_dataset, output_dir):
         eval_dataset=lm_dataset["test"],
         # data_collator=data_collator,
     )
-
     trainer.train()
     return trainer
+
+def train_jax(model_torch, lm_dataset, output_dir):
+    epochs = 3
+    batchsize = 4
+    seed = 0
+    logging_steps = 500//batchsize
+
+    key = jax.random.key(seed)
+    
+    # model_torch = ModelWithLoss(model_torch)
+    trainable_state_dict = {k: jax.device_put(t2j(v),jax.devices()[0]) 
+                            for k,v in model_torch.state_dict().items() if v.requires_grad}
+    nontrainable_state_dict = {k: jax.device_put(t2j(v),jax.devices()[0]) 
+                               for k,v in model_torch.state_dict().items() if not v.requires_grad}
+    model = t2j(model_torch)
+    del model_torch
+    
+    
+    seq_lens = [SEQ_LEN]
+    # seq_lens = [SEQ_LEN//2, SEQ_LEN]
+    def get_batches(key, split='train'):
+        from itertools import batched
+        split = list(lm_dataset[split])
+        for batch in batched(jax.random.permutation(key, len(split)), batchsize):
+            batch = [split[i] for i in batch]
+            maxlen = max([len(b['input_ids']) for b in batch])
+            seq_len = next(l for l in seq_lens if l >= maxlen)
+            input_ids = np.zeros((len(batch), seq_len), dtype=jnp.int32)
+            id_mask = np.zeros((len(batch), seq_len), dtype=jnp.bool)
+            for i,b in enumerate(batch):
+                ids = b['input_ids']
+                input_ids[i, :len(ids)] = ids
+                id_mask[i, :len(ids)] = True
+            yield (input_ids, id_mask)
+            
+    @jax.jit
+    def loss_fn(trainable_state_dict,nontrainable_state_dict,input_ids,id_mask):
+        result = model(input_ids, state_dict = dict(nontrainable_state_dict, **trainable_state_dict))
+        logits = result.logits[...,:-1,:]
+        id_mask = id_mask[...,1:]
+        labels = input_ids[...,1:]
+        cross_entropy = optax.losses.softmax_cross_entropy_with_integer_labels(
+                logits.reshape(-1, logits.shape[-1]), labels.reshape(-1),
+                )
+        return jnp.sum(jnp.where(id_mask.reshape(-1), cross_entropy, 0.0)) / jnp.sum(id_mask)
+
+    @functools.partial(jax.jit,donate_argnums=[0,1])
+    def update_function(trainable_state_dict, opt_state, nontrainable_state_dict, input_ids, id_mask):
+        loss, grads = jax.value_and_grad(loss_fn)(trainable_state_dict,nontrainable_state_dict,input_ids,id_mask)
+        updates, opt_state = optimizer.update(grads, opt_state, trainable_state_dict)
+        trainable_state_dict = optax.apply_updates(trainable_state_dict, updates)
+        return loss, trainable_state_dict, opt_state
+
+    def evaluate(trainable_state_dict, nontrainable_state_dict):
+        total = (len(lm_dataset['test'])-1) // batchsize + 1
+        loss = jax.array(0.0)
+        for batch in tqdm(get_batches(jax.random.key(0), split='test'), total=total):
+            loss += loss_fn(trainable_state_dict, nontrainable_state_dict, *batch)
+        return loss / total
+    
+    start_learning_rate = 5e-7
+    # optimizer = optax.adam(start_learning_rate)
+    optimizer = optax.adamw(start_learning_rate)
+    opt_state = optimizer.init(trainable_state_dict)
+
+    epoch_its = (len(lm_dataset['train'])-1) // batchsize + 1
+    total = epoch_its * epochs
+    for it,batch in tqdm(enumerate(itertools.chain(*map(get_batches, jax.random.split(key, epochs)))), total=total):
+        loss, trainable_state_dict, opt_state = update_function(trainable_state_dict, opt_state, nontrainable_state_dict, *batch)
+        if it % logging_steps == logging_steps-1 or it == total-1:
+            print({'loss' : loss, 'epoch' : it / epoch_its, 'learning_rate' : None, 'grad_norm' : None})
+        if it % epoch_its == epoch_its-1 or it == total-1:
+            evaluate()
+            
+    return trainable_state_dict
 
 
 def get_dataset_gsm8k():
@@ -107,5 +186,3 @@ def get_dataset_gsm8k():
 
 if __name__ == '__main__':
     trainer = train_lora()
-    
-
