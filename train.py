@@ -148,26 +148,29 @@ def train_jax(model_torch, lm_dataset, output_dir):
 
     test_batches = get_batches(jax.random.key(0), split='test')
     def evaluate(trainable_state_dict, nontrainable_state_dict):
-        loss = jax.array(0.0)
+        loss = jnp.array(0.0)
         num = 0
         for batch in tqdm(test_batches):
             loss += loss_fn(trainable_state_dict, nontrainable_state_dict, *batch)
             num += 1
         return loss / num
     
-    start_learning_rate = 5e-7
-    # optimizer = optax.adam(start_learning_rate)
-    optimizer = optax.adamw(start_learning_rate)
-    opt_state = optimizer.init(trainable_state_dict)
-
     batches = [batch for key in jax.random.split(key, epochs) for batch in get_batches(key)]
     epoch_its = len(batches) // epochs
+    
+    start_learning_rate = 5e-7
+    # optimizer = optax.adam(start_learning_rate)
+    schedule = optax.schedules.cosine_decay_schedule(start_learning_rate, decay_steps=len(batches))
+    optimizer = optax.adamw(schedule)
+    opt_state = optimizer.init(trainable_state_dict)
+
     for it,batch in tqdm(enumerate(batches),total=len(batches)):
         loss, trainable_state_dict, opt_state = update_function(trainable_state_dict, opt_state, nontrainable_state_dict, *batch)
         if it % logging_steps == logging_steps-1 or it == len(batches)-1:
             print({'loss' : loss, 'epoch' : it / epoch_its, 'learning_rate' : None, 'grad_norm' : None})
         if it % epoch_its == epoch_its-1 or it == len(batches)-1:
-            evaluate()
+            eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
+            print(f'eval_loss = {eval_loss}')
             
     return trainable_state_dict
 
