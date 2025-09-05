@@ -24,8 +24,8 @@ def get_lora_model(model,rank=8):
             super().__init__()
             assert linear.bias is None
             self.linear = linear
-            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = torch.bfloat16)/np.sqrt(rank))
-            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = torch.bfloat16 ))
+            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = linear.weight.dtype)/np.sqrt(rank))
+            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = linear.weight.dtype ))
         def forward(self, x):
             return self.linear(x) + 16 * x @ self.A @ self.B
     return wrap_linear(model,partial(LinearWithLoRA, rank=rank))
@@ -39,8 +39,8 @@ def get_dora_model(model,rank=8):
             mag = torch.linalg.norm(W, dim=0, keepdim=True)
             self.W = torch.nn.Parameter(W / mag, requires_grad = False)
             self.mag = torch.nn.Parameter(mag)
-            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = torch.bfloat16)/np.sqrt(rank))
-            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = torch.bfloat16 ))
+            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = linear.weight.dtype)/np.sqrt(rank))
+            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = linear.weight.dtype))
         def forward(self, x):
             norm = torch.linalg.norm(self.W + 16 * self.A @ self.B, dim=0, keepdim=True)
             return (x @ self.W + 16 * x @ self.A @ self.B) * self.mag / norm
@@ -58,8 +58,8 @@ def get_simple_dora_model(model,rank=8):
             mag = torch.linalg.norm(W, dim=0, keepdim=True)
             self.W = torch.nn.Parameter(W / mag, requires_grad = False)
             self.mag = torch.nn.Parameter(mag)
-            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = torch.bfloat16)/np.sqrt(rank))
-            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = torch.bfloat16 ))
+            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = linear.weight.dtype)/np.sqrt(rank))
+            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = linear.weight.dtype))
         def forward(self, x):
             return (x @ self.W + 16 * x @ self.A @ self.B) * self.mag
     return wrap_linear(model,partial(LinearWithSimpleDoraTranspose, rank=rank))
@@ -73,8 +73,8 @@ def get_dora_transpose_model(model,rank=8):
             mag = torch.linalg.norm(W, dim=1, keepdim=True)
             self.W = torch.nn.Parameter(W / mag, requires_grad = False)
             self.mag = torch.nn.Parameter(mag)
-            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = torch.bfloat16)/np.sqrt(rank))
-            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = torch.bfloat16 ))
+            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = linear.weight.dtype)/np.sqrt(rank))
+            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = linear.weight.dtype))
         def forward(self, x):
             norm = torch.linalg.norm(self.W + 16 * self.A @ self.B, dim=1, keepdim=True)
             x *= (self.mag / norm).view(-1)
@@ -90,8 +90,8 @@ def get_simple_dora_transpose_model(model,rank=8):
             mag = torch.linalg.norm(W, dim=1, keepdim=True)
             self.W = torch.nn.Parameter(W / mag, requires_grad = False)
             self.mag = torch.nn.Parameter(mag)
-            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = torch.bfloat16)/np.sqrt(rank))
-            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = torch.bfloat16 ))
+            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = linear.weight.dtype)/np.sqrt(rank))
+            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = linear.weight.dtype))
         def forward(self, x):
             x *= self.mag.view(-1)
             return x @ self.W + 16 * x @ self.A @ self.B
@@ -105,15 +105,15 @@ def get_simple_svdora_model(model,rankU=8, rankV=8):
             W = linear.weight.T
             print('here', W.shape)
             U, sigma, Vh = torch.linalg.svd(W.to(torch.float32), full_matrices=False)
+            print(sigma)
             self.U = torch.nn.Parameter(U.to(W.dtype), requires_grad=False)
             self.sigma = torch.nn.Parameter(sigma.to(W.dtype))
             self.Vh = torch.nn.Parameter(Vh.to(W.dtype), requires_grad=False)
-            print(self.sigma)
             
-            self.A1 = torch.nn.Parameter(torch.randn(U.shape[0], rankU, dtype = torch.bfloat16)/np.sqrt(rank))
-            self.B1 = torch.nn.Parameter(torch.zeros(rankU, U.shape[1], dtype = torch.bfloat16 ))
-            self.A2 = torch.nn.Parameter(torch.randn(Vh.shape[0], rankV, dtype = torch.bfloat16)/np.sqrt(rank))
-            self.B2 = torch.nn.Parameter(torch.zeros(rankV, Vh.shape[1], dtype = torch.bfloat16 ))
+            self.A1 = torch.nn.Parameter(torch.randn(U.shape[0], rankU, dtype = linear.weight.dtype)/np.sqrt(rankU))
+            self.B1 = torch.nn.Parameter(torch.zeros(rankU, U.shape[1], dtype = linear.weight.dtype))
+            self.A2 = torch.nn.Parameter(torch.randn(Vh.shape[0], rankV, dtype = linear.weight.dtype)/np.sqrt(rankV))
+            self.B2 = torch.nn.Parameter(torch.zeros(rankV, Vh.shape[1], dtype = linear.weight.dtype))
         def forward(self, x):
             x = x @ self.U + 16 * x @ self.A1 @ self.B1
             x = x * self.sigma
