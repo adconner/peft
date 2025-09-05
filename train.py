@@ -6,10 +6,9 @@ import jax
 import jax.numpy as jnp
 import optax
 from torch2jax import t2j
-import tqdm
-import itertools
 import functools
 from tqdm import tqdm
+import operator
 
 import peft
 
@@ -41,6 +40,7 @@ class ModelWithLoss(torch.nn.Module):
         # self.loss = torch.nn.CrossEntropyLoss(reduction="sum")
         self.loss = torch.nn.CrossEntropyLoss()
     def forward(self, *, input_ids=None, attention_mask=None ):
+        assert input_ids is not None
         result = self.model(input_ids=input_ids, attention_mask=attention_mask)
         logits = result['logits'][...,:-1,:]
         result.loss = self.loss( logits.reshape(-1, logits.shape[-1]), input_ids[:,1:].reshape(-1) )
@@ -77,9 +77,9 @@ def train_jax(model_torch, lm_dataset, output_dir):
     epochs = 3
     batchsize = 1
     seed = 0
-    logging_steps = 100
+    logging_steps = 500
     # start_learning_rate = 0.1
-    start_learning_rate = 7e-7
+    start_learning_rate = 3e-6
     # weight_decay = 0.01
 
     key = jax.random.key(seed)
@@ -95,12 +95,7 @@ def train_jax(model_torch, lm_dataset, output_dir):
     def get_batches(key, split='train'):
         from itertools import batched
         split = list(lm_dataset[split])
-        # vram usage goes as B*len^2, for B the batch size and len the sequence length
-        # group examples by biggest B so that len <= maxex/sqrt(B)
-        lens = [len(ex['input_ids']) for ex in split]
-        maxex = max(lens)
-        minex = min(lens)
-        # maxb = int(np.floor((maxex/minex) ** 2))
+        maxex = max([len(ex['input_ids']) for ex in split])
         # bs = [1]
         bs = [1,2,4]
         split_by_b = { }
@@ -128,6 +123,8 @@ def train_jax(model_torch, lm_dataset, output_dir):
                 batches.append((input_ids, id_mask))
         ixs = jax.random.permutation(key,len(batches))
         return [batches[i] for i in ixs]
+    
+
             
     @jax.jit
     def loss_fn(trainable_state_dict,nontrainable_state_dict,input_ids,id_mask):
@@ -138,22 +135,25 @@ def train_jax(model_torch, lm_dataset, output_dir):
         cross_entropy = optax.losses.softmax_cross_entropy_with_integer_labels(
                 logits.reshape(-1, logits.shape[-1]), labels.reshape(-1),
                 )
-        return jnp.sum(jnp.where(id_mask.reshape(-1), cross_entropy, 0.0)) / jnp.sum(id_mask)
-
+        return jnp.sum(jnp.where(id_mask.reshape(-1), cross_entropy, 0.0)), jnp.sum(id_mask)
+    
     @functools.partial(jax.jit,donate_argnums=[0,1])
     def update_function(trainable_state_dict, opt_state, nontrainable_state_dict, input_ids, id_mask):
-        loss, grads = jax.value_and_grad(loss_fn)(trainable_state_dict,nontrainable_state_dict,input_ids,id_mask)
+        (loss, tokens), grads = jax.value_and_grad(loss_fn,has_aux=True)(
+                trainable_state_dict,nontrainable_state_dict,input_ids,id_mask)
+        grad_norm_square = jnp.sqrt(jax.tree.reduce(operator.add, jax.tree.map(lambda e: jnp.sum(e**2), grads)))
         updates, opt_state = optimizer.update(grads, opt_state, trainable_state_dict)
         trainable_state_dict = optax.apply_updates(trainable_state_dict, updates)
-        return loss, trainable_state_dict, opt_state
+        return loss, tokens, grad_norm_square, trainable_state_dict, opt_state
 
     test_batches = get_batches(jax.random.key(0), split='test')
     def evaluate(trainable_state_dict, nontrainable_state_dict):
-        loss = jnp.array(0.0)
+        loss = 0.0
         num = 0
         for batch in tqdm(test_batches):
-            loss += loss_fn(trainable_state_dict, nontrainable_state_dict, *batch)
-            num += 1
+            cur_loss, tokens = loss_fn(trainable_state_dict, nontrainable_state_dict, *batch)
+            loss += float(cur_loss)
+            num += tokens
         return loss / num
     
     batches = [batch for key in jax.random.split(key, epochs) for batch in get_batches(key)]
@@ -163,17 +163,26 @@ def train_jax(model_torch, lm_dataset, output_dir):
     # optimizer = optax.adam(schedule)
     optimizer = optax.adamw(schedule)
     # optimizer = optax.adamw(schedule,weight_decay=weight_decay)
+    
     opt_state = optimizer.init(trainable_state_dict)
 
     cum_loss = 0.0
+    cum_grad_norm_square = 0.0
     n = 0
     for it,batch in tqdm(enumerate(batches),total=len(batches)):
-        loss, trainable_state_dict, opt_state = update_function(trainable_state_dict, opt_state, nontrainable_state_dict, *batch)
+        loss, tokens, grad_norm_square, trainable_state_dict, opt_state = update_function(
+                trainable_state_dict, opt_state, nontrainable_state_dict, *batch
+            )
         cum_loss += float(loss)
-        n += 1
+        cum_grad_norm_square += float(grad_norm_square)
+        n += int(tokens)
         if it % logging_steps == logging_steps-1 or it == len(batches)-1:
-            print({'loss' : cum_loss / n, 'epoch' : it / epoch_its, 'learning_rate' : float(schedule(it)), 'grad_norm' : None})
+            print({'loss' : cum_loss / n, 
+                   'learning_rate' : float(schedule(it)), 
+                   'grad_norm' : float(np.sqrt(cum_grad_norm_square / n)),
+                   'epoch' : it / epoch_its })
             cum_loss = 0.0
+            cum_grad_norm_square = 0.0
             n = 0
         if it % epoch_its == epoch_its-1 or it == len(batches)-1:
             eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
@@ -182,14 +191,14 @@ def train_jax(model_torch, lm_dataset, output_dir):
     return trainable_state_dict
 
 
-def get_dataset_gsm8k():
-    from datasets import load_dataset
-    data = load_dataset('openai/gsm8k', 'main')
+def get_dataset_gsm8k(randomize=False):
+    data = datasets.load_dataset('openai/gsm8k', 'main')
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-
-    #split data
-    # data = data["train"].train_test_split(test_size=.2, seed=1)
     
+    if randomize:
+        data = datasets.concatenate_datasets([data['train'],data['test']])
+        data = data.train_test_split(test_size=0.15)
+        
     def preprocess(batch):
         def format_question(ex):
             return f"Q: {ex}\nA: "
@@ -212,7 +221,6 @@ def get_dataset_gsm8k():
         return {
             "input_ids": examples_tokenized["input_ids"],
             "labels": examples_tokenized["input_ids"],
-            # "attention_mask": torch.ones(examples_tokenized["input_ids"].shape),
             "source_lens": source_lens,
         }
     

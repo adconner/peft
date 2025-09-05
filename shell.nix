@@ -47,12 +47,13 @@ let
             torch2jax = pythonPackages.buildPythonPackage rec {
               pname = "torch2jax";
               version = "0.1.0";
-              src = pkgs.fetchFromGitHub {
-                owner = "samuela";
-                repo = pname;
-                rev = "505769d32fc20b95e23f53c36dd320db31066282";
-                sha256 = "sha256-+1AICchWfmRou93iMq53Ai+1KkxYS8rBU14A9pjt3a0=";
-              };
+              src = ../torch2jax;
+              # src = pkgs.fetchFromGitHub {
+              #   owner = "samuela";
+              #   repo = pname;
+              #   rev = "505769d32fc20b95e23f53c36dd320db31066282";
+              #   sha256 = "sha256-+1AICchWfmRou93iMq53Ai+1KkxYS8rBU14A9pjt3a0=";
+              # };
               pyproject = true;
               build-system = with pythonPackages; [ setuptools ];
               propagatedBuildInputs = with pythonPackages; [ torch jax ];
@@ -85,7 +86,10 @@ pkgs.mkShell {
     torch
       
     ipython
+    ruff
     # venvShellHook
-  ];
+  ] ++ (with pkgs; [
+    pyright
+  ]);
   # venvDir = ".venv";
 }

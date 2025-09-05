@@ -95,7 +95,7 @@ def get_simple_dora_transpose_model(model,rank=8):
         def forward(self, x):
             x *= self.mag.view(-1)
             return x @ self.W + 16 * x @ self.A @ self.B
-    return wrap_linear(partial(LinearWithSimpleDoraTranspose, rank=rank))
+    return wrap_linear(model,partial(LinearWithSimpleDoraTranspose, rank=rank))
 
 def get_simple_svdora_model(model,rankU=8, rankV=8):
     class LinearWithSimpleSvdora(torch.nn.Module):

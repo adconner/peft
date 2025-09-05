@@ -1,11 +1,7 @@
 import transformers
-import numpy as np
-import torch
 import jax
-import jax.numpy as jnp
-import numpy as np
 from tqdm import tqdm
-import functools
+from torch2jax import t2j
 
 # model_name = "EleutherAI/gpt-neo-125m"
 # model_name = "EleutherAI/gpt-neo-1.3B"
@@ -32,7 +28,6 @@ seq = 300
 #     torch_inputs = { 'input_ids' : torch.randint(high=256000, size=(B, seq)).to('cuda') }
 #     res1 = model(**{k: v.to('cuda') for k,v in torch_inputs.items()})
 
-from torch2jax import t2j
 state_dict = {k: jax.device_put(t2j(v),jax.devices()[0]) for k,v in model.state_dict().items()}
 modelf = t2j(model)
 @jax.jit 
