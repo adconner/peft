@@ -12,25 +12,28 @@ import operator
 
 import peft
 
-# MODEL_NAME = "google/gemma-2b"
-MODEL_NAME = "NousResearch/Llama-3.2-1B"
+MODEL_NAME = "google/gemma-2b"
+# MODEL_NAME = "NousResearch/Llama-3.2-1B"
 SEQ_LEN = 463
 OUT_DIR = 'data'
 
-def train_lora():
+def train_peft():
     # model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
     model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, torch_dtype='auto')
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in model : {model_params}")
 
-    # lora_model = peft.get_simple_svdora_model(model)
-    lora_model = peft.get_lora_model(model)
-    # lora_model = model
-    lora_model_params = sum(p.numel() for p in lora_model.parameters() if p.requires_grad)
-    print(f"Total trainable parameters in lora model : {lora_model_params} and are {(lora_model_params/model_params)*100} % of the original model")
+    # peft_model = peft.get_simple_dora_model(model)
+    peft_model = peft.get_tied_lora_extra_model(model)
+    # peft_model = peft.get_simple_dora_transpose_model(model)
+    # peft_model = peft.get_lora_model(model)
+    # peft_model = model
+    lora_model_params = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
+    print(f"Total trainable parameters in peft model : {lora_model_params} and are {(lora_model_params/model_params)*100} % of the original model")
     
     dataset = get_dataset_gsm8k()
-    train_jax(lora_model, dataset, OUT_DIR)
+    train(peft_model, dataset, OUT_DIR)
+    # train_jax(peft_model, dataset, OUT_DIR)
     
 class ModelWithLoss(torch.nn.Module): 
     def __init__(self, model):
@@ -61,7 +64,8 @@ def train(model, lm_dataset, output_dir):
         save_safetensors = False, # work around bug 
         # bf16=True,
         gradient_accumulation_steps=1,
-        logging_steps=500
+        logging_steps=500,
+        # eval_on_start=True
     )
     trainer = Trainer(
         model=model,
@@ -79,7 +83,8 @@ def train_jax(model_torch, lm_dataset, output_dir):
     seed = 0
     logging_steps = 500
     # start_learning_rate = 0.1
-    start_learning_rate = 3e-6
+    # start_learning_rate = 3e-6 # lora
+    start_learning_rate = 3e-7
     # weight_decay = 0.01
 
     key = jax.random.key(seed)
@@ -156,6 +161,9 @@ def train_jax(model_torch, lm_dataset, output_dir):
             num += tokens
         return loss / num
     
+    eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
+    print(f'eval_loss = {float(eval_loss)}')
+    
     batches = [batch for key in jax.random.split(key, epochs) for batch in get_batches(key)]
     epoch_its = len(batches) // epochs
     
@@ -227,4 +235,4 @@ def get_dataset_gsm8k(randomize=False):
     return data.map(preprocess, batched=True)
 
 if __name__ == '__main__':
-    trainer = train_lora()
+    trainer = train_peft()
