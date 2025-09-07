@@ -89,13 +89,30 @@ def train_jax(model_torch, lm_dataset, output_dir):
 
     key = jax.random.key(seed)
     
-    # model_torch = ModelWithLoss(model_torch)
-    trainable_state_dict = {k: jax.device_put(t2j(v),jax.devices()[0]) 
-                            for k,v in model_torch.state_dict(keep_vars=True).items() if v.requires_grad}
-    nontrainable_state_dict = {k: jax.device_put(t2j(v),jax.devices()[0]) 
-                               for k,v in model_torch.state_dict(keep_vars=True).items() if not v.requires_grad}
-    model = t2j(model_torch)
-    del model_torch
+    state_dict = model_torch.state_dict(keep_vars=True)
+    trainable_keys = {}
+    nontrainable_keys = {}
+    for k,v in state_dict.items():
+        assert v.is_contiguous()
+        if v.requires_grad:
+            assert v.data_ptr() not in nontrainable_keys, "aliased parameters must agree whether they requires_grad"
+            trainable_keys.setdefault(v.data_ptr(), []).append(k)
+        else:
+            assert v.data_ptr() not in trainable_keys, "aliased parameters must agree whether they requires_grad"
+            nontrainable_keys.setdefault(v.data_ptr(), []).append(k)
+        # for k2 in ks:
+        #     v2 = state_dict[k2]
+        #     assert v.shape == v2.shape and v.stride() == v2.stride(), "parameter aliasing only allowed for trivial views"
+        # ks.append(k)
+
+    trainable_state_dict = { tuple(ks) : t2j(state_dict[ks[0]]) for ks in trainable_keys.values() }
+    nontrainable_state_dict = { tuple(ks) : t2j(state_dict[ks[0]]) for ks in nontrainable_keys.values() }
+    model_jax = t2j(model_torch)
+    del model_torch, state_dict, trainable_keys, nontrainable_keys
+    def model(input_ids, trainable_state_dict, nontrainable_state_dict):
+        state_dict = dict({k: v for ks, v in trainable_state_dict.items() for k in ks}, 
+                          **{k: v for ks, v in nontrainable_state_dict.items() for k in ks})
+        return model_jax(input_ids, state_dict = state_dict)
     
     def get_batches(key, split='train'):
         from itertools import batched
@@ -133,7 +150,7 @@ def train_jax(model_torch, lm_dataset, output_dir):
             
     @jax.jit
     def loss_fn(trainable_state_dict,nontrainable_state_dict,input_ids,id_mask):
-        result = model(input_ids, state_dict = dict(nontrainable_state_dict, **trainable_state_dict))
+        result = model(input_ids, trainable_state_dict, nontrainable_state_dict)
         logits = result.logits[...,:-1,:]
         id_mask = id_mask[...,1:]
         labels = input_ids[...,1:]
@@ -161,8 +178,8 @@ def train_jax(model_torch, lm_dataset, output_dir):
             num += tokens
         return loss / num
     
-    eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
-    print(f'eval_loss = {float(eval_loss)}')
+    # eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
+    # print(f'eval_loss = {float(eval_loss)}')
     
     batches = [batch for key in jax.random.split(key, epochs) for batch in get_batches(key)]
     epoch_its = len(batches) // epochs
