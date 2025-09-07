@@ -12,8 +12,8 @@ import operator
 
 import peft
 
-# MODEL_NAME = "google/gemma-2b"
-MODEL_NAME = "NousResearch/Llama-3.2-1B"
+MODEL_NAME = "google/gemma-2b"
+# MODEL_NAME = "NousResearch/Llama-3.2-1B"
 SEQ_LEN = 463
 OUT_DIR = 'data'
 
@@ -23,11 +23,11 @@ def train_peft():
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in model : {model_params}")
 
+    peft_model = peft.get_lora_model(model)
     # peft_model = peft.get_simple_dora_model(model)
-    peft_model = peft.get_dora_model(model)
+    # peft_model = peft.get_dora_model(model)
     # peft_model = peft.get_tied_lora_extra_model(model)
     # peft_model = peft.get_simple_dora_model(model)
-    # peft_model = peft.get_lora_model(model)
     
     # peft_model = model
     # peft_model.lm_head.requires_grad = False
@@ -89,8 +89,8 @@ def train_jax(model_torch, lm_dataset, output_dir):
     logging_steps = 250
     # start_learning_rate = 0.1
     start_learning_rate = 1.5e-5 # lora
-    # start_learning_rate = 3e-7
-    # weight_decay = 0.01
+    # start_learning_rate = 1.5e-5/4
+    weight_decay = 0.001
 
     key = jax.random.key(seed)
     
@@ -185,10 +185,12 @@ def train_jax(model_torch, lm_dataset, output_dir):
     batches = [batch for key in jax.random.split(key, epochs) for batch in get_batches(key)]
     epoch_its = len(batches) // epochs
     
-    schedule = optax.schedules.cosine_decay_schedule(start_learning_rate, decay_steps=len(batches))
+    schedule = optax.schedules.warmup_cosine_decay_schedule(start_learning_rate/10, start_learning_rate, 
+                                                            warmup_steps = len(batches) // 5, decay_steps=len(batches))
+    # schedule = optax.schedules.cosine_decay_schedule(start_learning_rate, decay_steps=len(batches))
     # optimizer = optax.adam(schedule)
-    optimizer = optax.adamw(schedule)
-    # optimizer = optax.adamw(schedule,weight_decay=weight_decay)
+    # optimizer = optax.adamw(schedule)
+    optimizer = optax.adamw(schedule,weight_decay=weight_decay)
     
     opt_state = optimizer.init(trainable_state_dict)
 
