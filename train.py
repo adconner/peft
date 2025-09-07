@@ -1,3 +1,4 @@
+
 from transformers import AutoModelForCausalLM, TrainingArguments, Trainer, AutoTokenizer
 import torch
 import datasets
@@ -12,6 +13,12 @@ import operator
 
 import peft
 
+import os
+os.environ['XLA_FLAGS'] = (
+    '--xla_gpu_triton_gemm_any=True '
+    '--xla_gpu_enable_latency_hiding_scheduler=true '
+)
+
 MODEL_NAME = "google/gemma-2b"
 # MODEL_NAME = "NousResearch/Llama-3.2-1B"
 SEQ_LEN = 463
@@ -23,10 +30,11 @@ def train_peft():
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in model : {model_params}")
 
-    peft_model = peft.get_lora_model(model)
+    # peft_model = peft.get_lora_model(model)
     # peft_model = peft.get_simple_dora_model(model)
     # peft_model = peft.get_dora_model(model)
-    # peft_model = peft.get_tied_lora_extra_model(model)
+    peft_model = peft.get_tied_lora_model(model)
+    # peft_model = peft.get_tied_lora_extra_model(model,64,64,False,True)
     # peft_model = peft.get_simple_dora_model(model)
     
     # peft_model = model
@@ -88,8 +96,8 @@ def train_jax(model_torch, lm_dataset, output_dir):
     seed = 0
     logging_steps = 250
     # start_learning_rate = 0.1
-    start_learning_rate = 1.5e-5 # lora
-    # start_learning_rate = 1.5e-5/4
+    # start_learning_rate = 1.5e-5 # lora
+    start_learning_rate = 1.5e-5/8
     weight_decay = 0.001
 
     key = jax.random.key(seed)
@@ -119,8 +127,8 @@ def train_jax(model_torch, lm_dataset, output_dir):
         from itertools import batched
         split = list(lm_dataset[split])
         maxex = max([len(ex['input_ids']) for ex in split])
-        # bs = [1]
-        bs = [1,2,4]
+        bs = [1]
+        # bs = [1,2,3,4]
         split_by_b = { }
         for ex in split:
             b = next(b for b in reversed(bs) if len(ex['input_ids']) <= maxex/b**0.9)
