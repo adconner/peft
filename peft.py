@@ -128,71 +128,49 @@ def get_lora_model(model,rank=8):
             return self.linear(x) + x @ self.A @ self.B
     return wrap_linear(model,functools.partial(LinearWithLoRA, rank=rank))
 
-def get_dora_model(model,rank=8):
+def get_dora_model(model,rank=8,transpose=False,eps=1e-6):
+    # ordinary dora scales the input (so reduces in the output dimension)
+    # we fix input dimension as 0 and output dimension as 1 to agree with matrices acting on the right
+    reducedim = 0 if transpose else 1
+    scaledim_name = 'o' if transpose else 'i'
     class LinearWithDora(torch.nn.Module):
-        def __init__(self, linear, rank):
+        def __init__(self, linear, rank, eps):
             super().__init__()
             assert linear.bias is None
+            self.eps = eps
             W = linear.weight.T
-            mag = torch.linalg.norm(W, dim=0, keepdim=True)
-            self.W = torch.nn.Parameter(W / mag, requires_grad = False)
+            mag = torch.sqrt(W.float().pow(2).mean(dim=reducedim) + self.eps).type_as(W)
+            self.W = torch.nn.Parameter(W.contiguous(), requires_grad = False)
             self.mag = torch.nn.Parameter(mag)
-            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = linear.weight.dtype))
-            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = linear.weight.dtype))
+            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = W.dtype))
+            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = W.dtype))
         def forward(self, x):
-            norm = torch.linalg.norm(self.W + self.A @ self.B, dim=0, keepdim=True)
-            return (x @ self.W + x @ self.A @ self.B) * self.mag / norm
-            # W = self.W + self.A @ self.B
-            # W *= self.mag / torch.linalg.norm(W, dim=0, keepdim=True)
-            # return x @ W
-    return wrap_linear(model,functools.partial(LinearWithDora, rank=rank))
+            Wtune = self.W + self.A @ self.B
+            mult = torch.rsqrt(Wtune.pow(2).mean(dim=reducedim) + self.eps)
+            mult *= self.mag
+            return torch.einsum(f'...i,io,{scaledim_name}->...o', x, Wtune, mult)
+    return wrap_linear(model,functools.partial(LinearWithDora, rank=rank, eps=eps))
 
-def get_simple_dora_model(model,rank=8):
+def get_simple_dora_model(model,rank=8,transpose=False,eps=1e-6):
+    reducedim = 0 if transpose else 1
     class LinearWithSimpleDoraTranspose(torch.nn.Module):
         def __init__(self, linear, rank):
             super().__init__()
             assert linear.bias is None
+            self.eps = eps
             W = linear.weight.T
-            mag = torch.linalg.norm(W, dim=0, keepdim=True)
-            self.W = torch.nn.Parameter(W / mag, requires_grad = False)
-            self.mag = torch.nn.Parameter(mag)
-            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = linear.weight.dtype))
-            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = linear.weight.dtype))
+            mag = torch.sqrt(W.float().pow(2).mean(dim=reducedim,keepdim=True) + self.eps)
+            self.W = torch.nn.Parameter((W.float() / mag).type_as(W).contiguous(), requires_grad = False)
+            self.mag = torch.nn.Parameter(mag.type_as(W).squeeze())
+            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = W.dtype))
+            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = W.dtype))
         def forward(self, x):
-            return (x @ self.W + x @ self.A @ self.B) * self.mag
-    return wrap_linear(model,functools.partial(LinearWithSimpleDoraTranspose, rank=rank))
-
-def get_dora_transpose_model(model,rank=8):
-    class LinearWithTransposeDora(torch.nn.Module):
-        def __init__(self, linear, rank):
-            super().__init__()
-            assert linear.bias is None
-            W = linear.weight.T
-            mag = torch.linalg.norm(W, dim=1, keepdim=True)
-            self.W = torch.nn.Parameter(W / mag, requires_grad = False)
-            self.mag = torch.nn.Parameter(mag)
-            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = linear.weight.dtype))
-            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = linear.weight.dtype))
-        def forward(self, x):
-            norm = torch.linalg.norm(self.W + self.A @ self.B, dim=1, keepdim=True)
-            x *= (self.mag / norm).view(-1)
-            return x @ self.W + x @ self.A @ self.B
-    return wrap_linear(model,functools.partial(LinearWithTransposeDora, rank=rank))
-
-def get_simple_dora_transpose_model(model,rank=8):
-    class LinearWithSimpleDoraTranspose(torch.nn.Module):
-        def __init__(self, linear, rank):
-            super().__init__()
-            assert linear.bias is None
-            W = linear.weight.T
-            mag = torch.linalg.norm(W, dim=1, keepdim=True)
-            self.W = torch.nn.Parameter(W / mag, requires_grad = False)
-            self.mag = torch.nn.Parameter(mag)
-            self.A = torch.nn.Parameter(torch.randn(linear.in_features, rank, dtype = linear.weight.dtype))
-            self.B = torch.nn.Parameter(torch.zeros(rank, linear.out_features, dtype = linear.weight.dtype))
-        def forward(self, x):
-            x *= self.mag.view(-1)
-            return x @ self.W + x @ self.A @ self.B
+            if not transpose:
+                x = x * self.mag
+            y = x @ self.W + x @ self.A @ self.B
+            if transpose:
+                y = y * self.mag
+            return y
     return wrap_linear(model,functools.partial(LinearWithSimpleDoraTranspose, rank=rank))
 
 def get_simple_svdora_model(model,rankU=8, rankV=8):

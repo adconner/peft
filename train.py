@@ -12,10 +12,8 @@ import operator
 
 import peft
 
-MODEL_NAME = "google/gemma-2b"
-# MODEL_NAME = "NousResearch/Llama-3.2-1B"
-MODEL_NAME = "meta-llama/Llama-3.2-3B"
-# MODEL_NAME = "NousResearch/Llama-3.2-3B"
+# MODEL_NAME = "google/gemma-2b"
+MODEL_NAME = "NousResearch/Llama-3.2-1B"
 SEQ_LEN = 463
 OUT_DIR = 'data'
 
@@ -26,12 +24,17 @@ def train_peft():
     print(f"Total trainable parameters in model : {model_params}")
 
     # peft_model = peft.get_simple_dora_model(model)
+    peft_model = peft.get_dora_model(model)
     # peft_model = peft.get_tied_lora_extra_model(model)
-    # peft_model = peft.get_simple_dora_transpose_model(model)
-    peft_model = peft.get_lora_model(model)
+    # peft_model = peft.get_simple_dora_model(model)
+    # peft_model = peft.get_lora_model(model)
+    
     # peft_model = model
-    lora_model_params = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
-    print(f"Total trainable parameters in peft model : {lora_model_params} and are {(lora_model_params/model_params)*100} % of the original model")
+    # peft_model.lm_head.requires_grad = False
+    # peft_model.model.embed_tokens.requires_grad = False
+    
+    peft_model_params = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
+    print(f"Total trainable parameters in peft model : {peft_model_params} and are {(peft_model_params/model_params)*100} % of the original model")
     
     dataset = get_dataset_gsm8k()
     # train(peft_model, dataset, OUT_DIR)
@@ -81,7 +84,7 @@ def train(model, lm_dataset, output_dir):
 
 def train_jax(model_torch, lm_dataset, output_dir):
     epochs = 3
-    batchsize = 2
+    batchsize = 1
     seed = 0
     logging_steps = 250
     # start_learning_rate = 0.1
