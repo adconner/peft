@@ -14,6 +14,8 @@ import peft
 
 MODEL_NAME = "google/gemma-2b"
 # MODEL_NAME = "NousResearch/Llama-3.2-1B"
+MODEL_NAME = "meta-llama/Llama-3.2-3B"
+# MODEL_NAME = "NousResearch/Llama-3.2-3B"
 SEQ_LEN = 463
 OUT_DIR = 'data'
 
@@ -24,16 +26,16 @@ def train_peft():
     print(f"Total trainable parameters in model : {model_params}")
 
     # peft_model = peft.get_simple_dora_model(model)
-    peft_model = peft.get_tied_lora_extra_model(model)
+    # peft_model = peft.get_tied_lora_extra_model(model)
     # peft_model = peft.get_simple_dora_transpose_model(model)
-    # peft_model = peft.get_lora_model(model)
+    peft_model = peft.get_lora_model(model)
     # peft_model = model
     lora_model_params = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in peft model : {lora_model_params} and are {(lora_model_params/model_params)*100} % of the original model")
     
     dataset = get_dataset_gsm8k()
-    train(peft_model, dataset, OUT_DIR)
-    # train_jax(peft_model, dataset, OUT_DIR)
+    # train(peft_model, dataset, OUT_DIR)
+    train_jax(peft_model, dataset, OUT_DIR)
     
 class ModelWithLoss(torch.nn.Module): 
     def __init__(self, model):
@@ -79,12 +81,12 @@ def train(model, lm_dataset, output_dir):
 
 def train_jax(model_torch, lm_dataset, output_dir):
     epochs = 3
-    batchsize = 1
+    batchsize = 2
     seed = 0
-    logging_steps = 500
+    logging_steps = 250
     # start_learning_rate = 0.1
-    # start_learning_rate = 3e-6 # lora
-    start_learning_rate = 3e-7
+    start_learning_rate = 1.5e-5 # lora
+    # start_learning_rate = 3e-7
     # weight_decay = 0.01
 
     key = jax.random.key(seed)
@@ -100,11 +102,7 @@ def train_jax(model_torch, lm_dataset, output_dir):
         else:
             assert v.data_ptr() not in trainable_keys, "aliased parameters must agree whether they requires_grad"
             nontrainable_keys.setdefault(v.data_ptr(), []).append(k)
-        # for k2 in ks:
-        #     v2 = state_dict[k2]
-        #     assert v.shape == v2.shape and v.stride() == v2.stride(), "parameter aliasing only allowed for trivial views"
-        # ks.append(k)
-
+            
     trainable_state_dict = { tuple(ks) : t2j(state_dict[ks[0]]) for ks in trainable_keys.values() }
     nontrainable_state_dict = { tuple(ks) : t2j(state_dict[ks[0]]) for ks in nontrainable_keys.values() }
     model_jax = t2j(model_torch)
