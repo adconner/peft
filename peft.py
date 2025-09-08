@@ -57,7 +57,7 @@ def wrap_like_linear(model,f_factory):
 # << n). For the special case l = n, a simpler implementation without loss of
 # expressivity is avaiable in get_tied_lora_extra_wrapper
 def create_tensor_embedding_wrapper(in_features, out_features, a, b, l, premult=True, postmult=True, dtype=torch.float32):
-    T = torch.nn.Parameter(torch.zeros(a, b, l, dtype=dtype))
+    T = torch.nn.Parameter(torch.randn(a, b, l, dtype=dtype))
     A = torch.nn.Parameter(torch.randn(a, in_features, dtype=dtype))
     B = torch.nn.Parameter(torch.randn(b, out_features, dtype=dtype))
     class LinearWithTensorEmbedding(torch.nn.Module):
@@ -69,11 +69,11 @@ def create_tensor_embedding_wrapper(in_features, out_features, a, b, l, premult=
             self.T = T
             self.A = A
             self.B = B
-            self.M = torch.nn.Parameter(torch.randn(l, dtype=dtype))
+            self.M = torch.nn.Parameter(torch.randn(l, dtype=dtype) * (1 if postmult else 0))
             if premult:
                 self.pre = torch.nn.Parameter(torch.ones(in_features,dtype=dtype))
             if postmult:
-                self.post = torch.nn.Parameter(torch.ones(out_features,dtype=dtype))
+                self.post = torch.nn.Parameter(torch.zeros(out_features,dtype=dtype))
         def forward(self, x):
             if premult:
                 x = x * self.pre
@@ -83,7 +83,7 @@ def create_tensor_embedding_wrapper(in_features, out_features, a, b, l, premult=
             return self.linear(x) + y
     return functools.partial(LinearWithTensorEmbedding, T=T, A=A, B=B)
 
-def get_tensor_contraction_model(model,a=8,b=8,l=8,premult=False,postmult=False):
+def get_tensor_contraction_model(model,a=8,b=8,l=8,premult=False,postmult=True):
     return wrap_like_linear(model, functools.partial(create_tensor_embedding_wrapper, a=a, b=b, l=l, 
                                                      premult=premult, postmult=postmult, dtype=model.dtype))
     
@@ -98,11 +98,11 @@ def create_tied_lora_extra_wrapper(in_features, out_features, a, b, premult=True
             self.linear = linear
             self.A = A
             self.B = B
-            self.M = torch.nn.Parameter(torch.zeros(a,b, dtype=dtype))
+            self.M = torch.nn.Parameter(torch.randn(a, b, dtype=dtype) * (1 if postmult else 0))
             if premult:
                 self.pre = torch.nn.Parameter(torch.ones(in_features,dtype=dtype))
             if postmult:
-                self.post = torch.nn.Parameter(torch.ones(out_features,dtype=dtype))
+                self.post = torch.nn.Parameter(torch.zeros(out_features,dtype=dtype))
         def forward(self, x):
             if premult:
                 x = x * self.pre
@@ -127,11 +127,11 @@ def create_tied_lora_wrapper(in_features, out_features, r, premult=True, postmul
             self.linear = linear
             self.A = A
             self.B = B
-            self.M = torch.nn.Parameter(torch.zeros(r, dtype=dtype))
+            self.M = torch.nn.Parameter(torch.ones(r, dtype=dtype) * (1 if postmult else 0))
             if premult:
                 self.pre = torch.nn.Parameter(torch.ones(in_features,dtype=dtype))
             if postmult:
-                self.post = torch.nn.Parameter(torch.ones(out_features,dtype=dtype))
+                self.post = torch.nn.Parameter(torch.zeros(out_features,dtype=dtype))
         def forward(self, x):
             if premult:
                 x = x * self.pre

@@ -33,9 +33,10 @@ def train_peft():
     # peft_model = peft.get_lora_model(model)
     # peft_model = peft.get_simple_dora_model(model)
     # peft_model = peft.get_dora_model(model)
-    peft_model = peft.get_tied_lora_model(model)
-    # peft_model = peft.get_tied_lora_extra_model(model,64,64,False,True)
+    # peft_model = peft.get_tied_lora_model(model,r=16)
+    # peft_model = peft.get_tied_lora_extra_model(model,a=16,b=16)
     # peft_model = peft.get_simple_dora_model(model)
+    peft_model = peft.get_tensor_contraction_model(model,a=16,b=16,l=8,premult=False,postmult=False)
     
     # peft_model = model
     # peft_model.lm_head.requires_grad = False
@@ -97,7 +98,7 @@ def train_jax(model_torch, lm_dataset, output_dir):
     logging_steps = 250
     # start_learning_rate = 0.1
     # start_learning_rate = 1.5e-5 # lora
-    start_learning_rate = 1.5e-5/8
+    start_learning_rate = 1.5e-5/2
     weight_decay = 0.001
 
     key = jax.random.key(seed)
@@ -127,8 +128,9 @@ def train_jax(model_torch, lm_dataset, output_dir):
         from itertools import batched
         split = list(lm_dataset[split])
         maxex = max([len(ex['input_ids']) for ex in split])
-        bs = [1]
-        # bs = [1,2,3,4]
+        # bs = [1]
+        # bs = [1,2]
+        bs = [1,2,3,4]
         split_by_b = { }
         for ex in split:
             b = next(b for b in reversed(bs) if len(ex['input_ids']) <= maxex/b**0.9)
