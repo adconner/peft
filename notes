@@ -11,5 +11,10 @@ dynamic position encoding, like lc0
 chess:
 transformer lc0 can also consume search tree descendants, dynamic puct
 
-full fine tune possible?
+full fine tune possible? gradient checkpointing
 properly exclude embedding/decoding?
+
+better initialization. choice of stdev
+can all factors be nonzero?
+
+config -> parameter sweeep

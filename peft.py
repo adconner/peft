@@ -69,15 +69,14 @@ def create_tensor_embedding_wrapper(in_features, out_features, a, b, l, premult=
             self.T = T
             self.A = A
             self.B = B
-            self.M = torch.nn.Parameter(torch.randn(l, dtype=dtype) * (1 if postmult else 0))
+            self.M = torch.nn.Parameter(torch.randn(l, dtype=dtype) * (1 if postmult or premult else 0))
             if premult:
-                self.pre = torch.nn.Parameter(torch.ones(in_features,dtype=dtype))
+                self.pre = torch.nn.Parameter(torch.ones(in_features,dtype=dtype) * (1 if postmult else 0))
             if postmult:
                 self.post = torch.nn.Parameter(torch.zeros(out_features,dtype=dtype))
         def forward(self, x):
-            if premult:
-                x = x * self.pre
-            y = torch.einsum('...i,ai,bo,l,abl->...o', x, self.A, self.B, self.M, self.T)
+            xi = x * self.pre if premult else x
+            y = torch.einsum('...i,ai,bo,l,abl->...o', xi, self.A, self.B, self.M, self.T)
             if postmult:
                 y = y * self.post
             return self.linear(x) + y
@@ -104,9 +103,8 @@ def create_tied_lora_extra_wrapper(in_features, out_features, a, b, premult=True
             if postmult:
                 self.post = torch.nn.Parameter(torch.zeros(out_features,dtype=dtype))
         def forward(self, x):
-            if premult:
-                x = x * self.pre
-            y = torch.einsum('...i,ai,ab,bo->...o', x, self.A, self.M, self.B)
+            xi = x * self.pre if premult else x
+            y = torch.einsum('...i,ai,ab,bo->...o', xi, self.A, self.M, self.B)
             if postmult:
                 y = y * self.post
             return self.linear(x) + y
@@ -133,9 +131,8 @@ def create_tied_lora_wrapper(in_features, out_features, r, premult=True, postmul
             if postmult:
                 self.post = torch.nn.Parameter(torch.zeros(out_features,dtype=dtype))
         def forward(self, x):
-            if premult:
-                x = x * self.pre
-            y = torch.einsum('...i,ir,r,ro->...o', x, self.A, self.M, self.B)
+            xi = x * self.pre if premult else x
+            y = torch.einsum('...i,ir,r,ro->...o', xi, self.A, self.M, self.B)
             if postmult:
                 y = y * self.post
             return self.linear(x) + y

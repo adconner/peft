@@ -33,10 +33,13 @@ def train_peft():
     # peft_model = peft.get_lora_model(model)
     # peft_model = peft.get_simple_dora_model(model)
     # peft_model = peft.get_dora_model(model)
-    # peft_model = peft.get_tied_lora_model(model,r=16)
+    # peft_model = peft.get_tied_lora_model(model,r=8)
     # peft_model = peft.get_tied_lora_extra_model(model,a=16,b=16)
     # peft_model = peft.get_simple_dora_model(model)
-    peft_model = peft.get_tensor_contraction_model(model,a=16,b=16,l=8,premult=False,postmult=False)
+    # peft_model = peft.get_tensor_contraction_model(model,a=8,b=8,l=8,premult=False,postmult=True) # pretty good
+    # peft_model = peft.get_tensor_contraction_model(model,a=8,b=8,l=8,premult=False,postmult=False) # bad
+    # peft_model = peft.get_tensor_contraction_model(model,a=8,b=8,l=8,premult=True,postmult=False) # okay
+    peft_model = peft.get_tensor_contraction_model(model,a=8,b=8,l=8,premult=True,postmult=True) # pretty good
     
     # peft_model = model
     # peft_model.lm_head.requires_grad = False
