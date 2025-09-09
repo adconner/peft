@@ -26,7 +26,7 @@ OUT_DIR = 'data'
 
 def train_peft():
     # model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
-    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, torch_dtype='auto')
+    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype='auto')
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in model : {model_params}")
 
@@ -36,10 +36,14 @@ def train_peft():
     # peft_model = peft.get_tied_lora_model(model,r=8)
     # peft_model = peft.get_tied_lora_extra_model(model,a=16,b=16)
     # peft_model = peft.get_simple_dora_model(model)
-    # peft_model = peft.get_tensor_contraction_model(model,a=8,b=8,l=8,premult=False,postmult=True) # pretty good
-    # peft_model = peft.get_tensor_contraction_model(model,a=8,b=8,l=8,premult=False,postmult=False) # bad
-    # peft_model = peft.get_tensor_contraction_model(model,a=8,b=8,l=8,premult=True,postmult=False) # okay
-    peft_model = peft.get_tensor_contraction_model(model,a=8,b=8,l=8,premult=True,postmult=True) # pretty good
+    # peft_model = peft.get_tensor_embedding_model(model,a=8,b=8,l=8,premult=False,postmult=True) # pretty good
+    # peft_model = peft.get_tensor_embedding_model(model,a=8,b=8,l=8,premult=False,postmult=False) # bad
+    # peft_model = peft.get_tensor_embedding_model(model,a=8,b=8,l=8,premult=True,postmult=False) # okay
+    # peft_model = peft.get_tensor_embedding_model(model,a=8,b=8,l=8,premult=True,postmult=True) # pretty good
+    
+    peft_model = peft.get_tensor_embedding_model(model,a=8,b=8,l=32,premult=False,postmult=False) # pretty good
+    # peft_model = peft.get_tied_lora_extra_model(model,a=8,b=8,premult=False,postmult=False)
+    # peft_model = peft.get_tied_lora_model(model,r=8,premult=False,postmult=True)
     
     # peft_model = model
     # peft_model.lm_head.requires_grad = False
