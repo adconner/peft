@@ -1,0 +1,17 @@
+peft_config:
+  type: tensor_embedding
+  a: 4
+  b: 4
+  l: 2
+  premult: false
+  postmult: false
+model_name: google/gemma-2b
+dataset_randomize: false
+seq_len: 463
+out_dir: data
+epochs: 3
+batchsize: 1
+seed: 0
+logging_steps: 250
+peak_learning_rate: 7.5e-07
+weight_decay: 0.001

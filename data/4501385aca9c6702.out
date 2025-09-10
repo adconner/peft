@@ -1,0 +1,6 @@
+{'loss': 580.0, 'grad_norm_square': 145408.0, 'tokens': 455}
+{'loss': 370.0, 'grad_norm_square': 97792.0, 'tokens': 312}
+{'loss': 600.0, 'grad_norm_square': 239616.0, 'tokens': 432}
+{'loss': 616.0, 'grad_norm_square': 172032.0, 'tokens': 471}
+{'loss': 314.0, 'grad_norm_square': 93184.0, 'tokens': 327}
+{'loss': 312.0, 'grad_norm_square': 66048.0, 'tokens': 314}

@@ -1,0 +1,18 @@
+peft_config:
+  type: partially_tied_lora
+  r: 16
+  la: 8
+  lb: 1
+  premult: false
+  midmult: false
+  postmult: false
+model_name: google/gemma-2b
+dataset_randomize: false
+seq_len: 463
+out_dir: data
+epochs: 3
+batchsize: 1
+seed: 0
+logging_steps: 250
+peak_learning_rate: 7.500000000000001e-05
+weight_decay: 0.001
