@@ -76,6 +76,7 @@ pkgs.mkShell {
     chex
     flax
     torch2jax
+    draccus
       
     datasets
     # evaluate

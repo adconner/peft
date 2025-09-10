@@ -11,6 +11,10 @@ import functools
 from tqdm import tqdm
 import operator
 
+from dataclasses import dataclass, field
+import draccus
+import yaml
+
 import peft
 
 import os
@@ -19,43 +23,46 @@ os.environ['XLA_FLAGS'] = (
     '--xla_gpu_enable_latency_hiding_scheduler=true '
 )
 
-MODEL_NAME = "google/gemma-2b"
-# MODEL_NAME = "NousResearch/Llama-3.2-1B"
-SEQ_LEN = 463
-OUT_DIR = 'data'
+@dataclass
+class PeftTrainConfig:
+    peft_config: peft.PeftStrategyConfig = field(default_factory=peft.LoraConfig)
+    # peft_config: peft.PeftStrategyConfig = field(default_factory=peft.TensorEmbeddingConfig)
+    
+    model_name : str = 'google/gemma-2b'
+    # model_name : str = 'NousResearch/Llama-3.2-1B'
+    
+    dataset_randomize : bool = False
+    seq_len : int = 463
+    
+    out_dir : str = 'data'
+    
+    epochs : int = 3
+    batchsize : int = 1
+    seed : int = 0
+    logging_steps : int = 250
+    # peak_learning_rate :int = 1.5e-5 # lora
+    peak_learning_rate : float = 7.5e-6
+    weight_decay : float = 0.001
 
-def train_peft():
-    # model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
-    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype='auto')
+def train_peft(cfg):
+    model = AutoModelForCausalLM.from_pretrained(cfg.model_name, dtype='auto')
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in model : {model_params}")
 
-    # peft_model = peft.get_lora_model(model)
-    # peft_model = peft.get_simple_dora_model(model)
-    # peft_model = peft.get_dora_model(model)
-    # peft_model = peft.get_tied_lora_model(model,r=8)
-    # peft_model = peft.get_tied_lora_extra_model(model,a=16,b=16)
-    # peft_model = peft.get_simple_dora_model(model)
-    # peft_model = peft.get_tensor_embedding_model(model,a=8,b=8,l=8,premult=False,postmult=True) # pretty good
-    # peft_model = peft.get_tensor_embedding_model(model,a=8,b=8,l=8,premult=False,postmult=False) # bad
-    # peft_model = peft.get_tensor_embedding_model(model,a=8,b=8,l=8,premult=True,postmult=False) # okay
-    # peft_model = peft.get_tensor_embedding_model(model,a=8,b=8,l=8,premult=True,postmult=True) # pretty good
-    
-    # peft_model = peft.get_tied_lora_extra_model(model,a=8,b=8,premult=False,postmult=False)
-    # peft_model = peft.get_tied_lora_model(model,r=8,premult=False,postmult=True)
-    
-    peft_model = peft.get_partially_tied_lora_model(model, r=8, la=8, lb=8, premult=False, midmult=False, postmult=False)
+    peft_model = cfg.peft_config.wrap(model)
         
-    # peft_model = model
-    # peft_model.lm_head.requires_grad = False
-    # peft_model.model.embed_tokens.requires_grad = False
-    
     peft_model_params = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in peft model : {peft_model_params} and are {(peft_model_params/model_params)*100} % of the original model")
+
+    outf = draccus.encode(cfg)
     
-    dataset = get_dataset_gsm8k()
+    dataset = get_dataset_gsm8k(cfg)
+    
+    cur = yaml.dump(draccus.encode(cfg), default_flow_style=False, sort_keys=False)
+    outf = cfg.out_dir+'/'+hex(abs(hash(cur))).lstrip('0x')+'.out'
+    
     # train(peft_model, dataset, OUT_DIR)
-    train_jax(peft_model, dataset, OUT_DIR)
+    train_jax(peft_model, dataset, cfg, outf)
     
 class ModelWithLoss(torch.nn.Module): 
     def __init__(self, model):
@@ -99,17 +106,9 @@ def train(model, lm_dataset, output_dir):
     trainer.train()
     return trainer
 
-def train_jax(model_torch, lm_dataset, output_dir):
-    epochs = 3
-    batchsize = 1
-    seed = 0
-    logging_steps = 250
-    # start_learning_rate = 0.1
-    # start_learning_rate = 1.5e-5 # lora
-    start_learning_rate = 1.5e-5/2
-    weight_decay = 0.001
-
-    key = jax.random.key(seed)
+def train_jax(model_torch, lm_dataset, cfg, outf):
+    outf = open(outf,'w')
+    key = jax.random.key(cfg.seed)
     
     state_dict = model_torch.state_dict(keep_vars=True)
     trainable_keys = {}
@@ -151,7 +150,7 @@ def train_jax(model_torch, lm_dataset, output_dir):
             # seq_len = int(np.floor(maxex / np.sqrt(b)))
             seq_len = max(len(ex['input_ids']) for ex in exs)
             # b = max(b-1,1)
-            b *= batchsize
+            b *= cfg.batchsize
             ixs = jax.random.permutation(keycur, len(exs))
             for batch in batched(ixs, b):
                 batch = [exs[i] for i in batch]
@@ -164,8 +163,6 @@ def train_jax(model_torch, lm_dataset, output_dir):
                 batches.append((input_ids, id_mask))
         ixs = jax.random.permutation(key,len(batches))
         return [batches[i] for i in ixs]
-    
-
             
     @jax.jit
     def loss_fn(trainable_state_dict,nontrainable_state_dict,input_ids,id_mask):
@@ -200,15 +197,15 @@ def train_jax(model_torch, lm_dataset, output_dir):
     # eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
     # print(f'eval_loss = {float(eval_loss)}')
     
-    batches = [batch for key in jax.random.split(key, epochs) for batch in get_batches(key)]
-    epoch_its = len(batches) // epochs
+    batches = [batch for key in jax.random.split(key, cfg.epochs) for batch in get_batches(key)]
+    epoch_its = len(batches) // cfg.epochs
     
-    schedule = optax.schedules.warmup_cosine_decay_schedule(start_learning_rate/10, start_learning_rate, 
+    schedule = optax.schedules.warmup_cosine_decay_schedule(cfg.peak_learning_rate/10, cfg.peak_learning_rate, 
                                                             warmup_steps = len(batches) // 5, decay_steps=len(batches))
-    # schedule = optax.schedules.cosine_decay_schedule(start_learning_rate, decay_steps=len(batches))
+    # schedule = optax.schedules.cosine_decay_schedule(cfg.peak_learning_rate, decay_steps=len(batches))
     # optimizer = optax.adam(schedule)
     # optimizer = optax.adamw(schedule)
-    optimizer = optax.adamw(schedule,weight_decay=weight_decay)
+    optimizer = optax.adamw(schedule,weight_decay=cfg.weight_decay)
     
     opt_state = optimizer.init(trainable_state_dict)
 
@@ -222,7 +219,9 @@ def train_jax(model_torch, lm_dataset, output_dir):
         cum_loss += float(loss)
         cum_grad_norm_square += float(grad_norm_square)
         n += int(tokens)
-        if it % logging_steps == logging_steps-1 or it == len(batches)-1:
+        outf.write(str({'loss' : float(loss), 'grad_norm_square' : float(grad_norm_square), 'tokens' : int(tokens)})+'\n')
+        outf.flush()
+        if it % cfg.logging_steps == cfg.logging_steps-1 or it == len(batches)-1:
             print({'loss' : cum_loss / n, 
                    'learning_rate' : float(schedule(it)), 
                    'grad_norm' : float(np.sqrt(cum_grad_norm_square / n)),
@@ -233,15 +232,19 @@ def train_jax(model_torch, lm_dataset, output_dir):
         if it % epoch_its == epoch_its-1 or it == len(batches)-1:
             eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
             print(f'eval_loss = {float(eval_loss)}')
+            outf.write(str({'eval_loss' : float(eval_loss)})+'\n')
+            outf.flush()
+
+    outf.close()
             
     return trainable_state_dict
 
 
-def get_dataset_gsm8k(randomize=False):
+def get_dataset_gsm8k(cfg):
     data = datasets.load_dataset('openai/gsm8k', 'main')
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
     
-    if randomize:
+    if cfg.dataset_randomize:
         data = datasets.concatenate_datasets([data['train'],data['test']])
         data = data.train_test_split(test_size=0.15)
         
@@ -258,9 +261,9 @@ def get_dataset_gsm8k(randomize=False):
         targets = [format_answer(answer) for answer in batch['answer']]
 
         examples = [s + t for s, t in zip(sources, targets)]
-        sources_tokenized = tokenizer(sources, return_tensors="np", padding=False, truncation=True, max_length=SEQ_LEN)
-        examples_tokenized = tokenizer(examples, return_tensors="np", padding=False, truncation=True, max_length=SEQ_LEN)
-        # examples_tokenized = tokenizer(examples, return_tensors="np", padding='max_length', truncation=True, max_length=SEQ_LEN)
+        sources_tokenized = tokenizer(sources, return_tensors="np", padding=False, truncation=True, max_length=cfg.seq_len)
+        examples_tokenized = tokenizer(examples, return_tensors="np", padding=False, truncation=True, max_length=cfg.seq_len)
+        # examples_tokenized = tokenizer(examples, return_tensors="np", padding='max_length', truncation=True, max_length=cfg.seq_len)
 
         source_lens = [len(s) for s in sources_tokenized["input_ids"]]
 
@@ -273,4 +276,5 @@ def get_dataset_gsm8k(randomize=False):
     return data.map(preprocess, batched=True)
 
 if __name__ == '__main__':
-    trainer = train_peft()
+    cfg = draccus.parse(config_class=PeftTrainConfig)
+    trainer = train_peft(cfg)
