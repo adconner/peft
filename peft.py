@@ -75,13 +75,10 @@ def create_tensor_embedding_wrapper(in_features, out_features, a, b, l, premult,
             if postmult:
                 self.post = torch.nn.Parameter(torch.ones(out_features,dtype=dtype))
         def forward(self, x):
-            xi = x * self.pre if premult else x
-            y = torch.einsum('...i,ai,bo,l,abl->...o', xi, self.A, self.B, self.M, self.T)
-            if postmult:
-                y = y * self.post
-            return self.linear(x) + y
+            return self.linear(x) + torch.einsum('...i,ai,bo,l,abl,i,o->...o', x, self.A, self.B, self.M, self.T,
+                                                 self.premult if premult else torch.ones((1,)),
+                                                 self.postmult if postmult else torch.ones((1,)))
     return functools.partial(LinearWithTensorEmbedding, T=T, A=A, B=B)
-
 def get_tensor_embedding_model(model,a=8,b=8,l=8,premult=False,postmult=True):
     return wrap_like_linear(model, functools.partial(create_tensor_embedding_wrapper, a=a, b=b, l=l, 
                                                      premult=premult, postmult=postmult, dtype=model.dtype))
@@ -103,13 +100,10 @@ def create_tied_lora_extra_wrapper(in_features, out_features, a, b, premult, pos
             if postmult:
                 self.post = torch.nn.Parameter(torch.ones(out_features,dtype=dtype))
         def forward(self, x):
-            xi = x * self.pre if premult else x
-            y = torch.einsum('...i,ai,ab,bo->...o', xi, self.A, self.M, self.B)
-            if postmult:
-                y = y * self.post
-            return self.linear(x) + y
+            return self.linear(x) + torch.einsum('...i,ai,ab,bo,i,o->...o', x, self.A, self.M, self.B,
+                                                 self.pre if premult else torch.ones((1,)),
+                                                 self.post if postmult else torch.ones((1,)))
     return functools.partial(LinearWithTiedLoraExtra, A=A, B=B)
-
 def get_tied_lora_extra_model(model,a=8,b=8,premult=False,postmult=True):
     return wrap_like_linear(model, functools.partial(create_tied_lora_extra_wrapper, a=a, b=b, 
                                                      premult=premult, postmult=postmult, dtype=model.dtype))
@@ -131,16 +125,43 @@ def create_tied_lora_wrapper(in_features, out_features, r, premult, postmult, dt
             if postmult:
                 self.post = torch.nn.Parameter(torch.ones(out_features,dtype=dtype))
         def forward(self, x):
-            xi = x * self.pre if premult else x
-            y = torch.einsum('...i,ir,r,ro->...o', xi, self.A, self.M, self.B)
-            if postmult:
-                y = y * self.post
-            return self.linear(x) + y
+            return self.linear(x) + torch.einsum('...i,ir,r,ro,i,o->...o', x, self.A, self.M, self.B,
+                                                 self.pre if premult else torch.ones((1,)),
+                                                 self.post if postmult else torch.ones((1,)))
     return functools.partial(LinearWithTiedLoraExtra, A=A, B=B)
-
 def get_tied_lora_model(model,r=8,premult=False,postmult=True):
     return wrap_like_linear(model, functools.partial(create_tied_lora_wrapper, r=r,
                                                  premult=premult, postmult=postmult, dtype=model.dtype))
+
+def create_partially_tied_lora_wrapper(in_features, out_features, r, la, lb, premult, midmult, postmult, dtype):
+    A = torch.nn.Parameter(torch.randn(in_features, r, la, dtype=dtype))
+    B = torch.nn.Parameter(torch.zeros(r, out_features, lb, dtype=dtype))
+    class LinearWithTiedLoraExtra(torch.nn.Module):
+        def __init__(self, linear, A, B):
+            super().__init__()
+            assert linear.bias is None
+            assert linear.weight.dtype is dtype
+            self.linear = linear
+            self.A = A
+            self.B = B
+            self.MA = torch.nn.Parameter(torch.randn(la, dtype=dtype))
+            self.MB = torch.nn.Parameter(torch.randn(lb, dtype=dtype))
+            if premult:
+                self.pre = torch.nn.Parameter(torch.ones(in_features,dtype=dtype))
+            if midmult:
+                self.mid = torch.nn.Parameter(torch.ones(r,dtype=dtype))
+            if postmult:
+                self.post = torch.nn.Parameter(torch.ones(out_features,dtype=dtype))
+        def forward(self, x):
+            return self.linear(x) + torch.einsum('...i,irA,roB,A,B,i,r,o->...o', x, self.A, self.B, self.MA, self.MB, 
+                             self.pre if premult else torch.ones((1,)),
+                             self.mid if midmult else torch.ones((1,)),
+                             self.post if postmult else torch.ones((1,))
+                             )
+    return functools.partial(LinearWithTiedLoraExtra, A=A, B=B)
+def get_partially_tied_lora_model(model, r=8, la=8, lb=8, premult=False, midmult=False, postmult=False):
+    return wrap_like_linear(model, functools.partial(create_partially_tied_lora_wrapper, r=r, la=la, lb=lb,
+                                                 premult=premult, midmult=midmult, postmult=postmult, dtype=model.dtype))
 
 def get_lora_model(model,rank=8):
     class LinearWithLoRA(torch.nn.Module):

@@ -41,10 +41,11 @@ def train_peft():
     # peft_model = peft.get_tensor_embedding_model(model,a=8,b=8,l=8,premult=True,postmult=False) # okay
     # peft_model = peft.get_tensor_embedding_model(model,a=8,b=8,l=8,premult=True,postmult=True) # pretty good
     
-    peft_model = peft.get_tensor_embedding_model(model,a=8,b=8,l=32,premult=False,postmult=False) # pretty good
     # peft_model = peft.get_tied_lora_extra_model(model,a=8,b=8,premult=False,postmult=False)
     # peft_model = peft.get_tied_lora_model(model,r=8,premult=False,postmult=True)
     
+    peft_model = peft.get_partially_tied_lora_model(model, r=8, la=8, lb=8, premult=False, midmult=False, postmult=False)
+        
     # peft_model = model
     # peft_model.lm_head.requires_grad = False
     # peft_model.model.embed_tokens.requires_grad = False
