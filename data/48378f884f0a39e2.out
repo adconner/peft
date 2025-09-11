@@ -1,3 +1,4 @@
+{'model_params': 2506172416, 'peft_params': 274288}
 {'loss': 580.0, 'grad_norm_square': 47872.0, 'tokens': 455}
 {'loss': 420.0, 'grad_norm_square': 78848.0, 'tokens': 312}
 {'loss': 756.0, 'grad_norm_square': 102912.0, 'tokens': 432}
