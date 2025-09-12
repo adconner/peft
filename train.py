@@ -51,18 +51,17 @@ def train_peft(cfg):
 
     peft_model = cfg.peft_config.wrap(model)
         
-    peft_model_params = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
-    print(f"Total trainable parameters in peft model : {peft_model_params} and are {(peft_model_params/model_params)*100} % of the original model")
-
-    outf = draccus.encode(cfg)
+    peft_params = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
+    print(f"Total trainable parameters in peft model : {peft_params} and are {(peft_params/model_params)*100} % of the original model")
     
     dataset = get_dataset_gsm8k(cfg)
     
-    cur = yaml.dump(draccus.encode(cfg), default_flow_style=False, sort_keys=False)
-    outf = cfg.out_dir+'/'+hex(abs(hash(cur))).lstrip('0x')+'.out'
+    basename = yaml.dump(draccus.encode(cfg), default_flow_style=False, sort_keys=False)
+    outs = open(cfg.out_dir+'/'+hex(abs(hash(basename))).lstrip('0x')+'.out','w')
+    outs.write(str({'model_params' : model_params, 'peft_params' : peft_params})+'\n')
     
     # train(peft_model, dataset, OUT_DIR)
-    train_jax(peft_model, dataset, cfg, outf)
+    train_jax(peft_model, dataset, cfg, outs)
     
 class ModelWithLoss(torch.nn.Module): 
     def __init__(self, model):
@@ -106,8 +105,7 @@ def train(model, lm_dataset, output_dir):
     trainer.train()
     return trainer
 
-def train_jax(model_torch, lm_dataset, cfg, outf):
-    outf = open(outf,'w')
+def train_jax(model_torch, lm_dataset, cfg, outs):
     key = jax.random.key(cfg.seed)
     
     state_dict = model_torch.state_dict(keep_vars=True)
@@ -219,23 +217,25 @@ def train_jax(model_torch, lm_dataset, cfg, outf):
         cum_loss += float(loss)
         cum_grad_norm_square += float(grad_norm_square)
         n += int(tokens)
-        outf.write(str({'loss' : float(loss), 'grad_norm_square' : float(grad_norm_square), 'tokens' : int(tokens)})+'\n')
-        outf.flush()
+        outs.write(str({'loss' : float(loss), 'grad_norm_square' : float(grad_norm_square), 'tokens' : int(tokens)})+'\n')
+        outs.flush()
         if it % cfg.logging_steps == cfg.logging_steps-1 or it == len(batches)-1:
             print({'loss' : cum_loss / n, 
                    'learning_rate' : float(schedule(it)), 
                    'grad_norm' : float(np.sqrt(cum_grad_norm_square / n)),
                    'epoch' : it / epoch_its })
+            if cum_loss / n > 2.0:
+                break
             cum_loss = 0.0
             cum_grad_norm_square = 0.0
             n = 0
         if it % epoch_its == epoch_its-1 or it == len(batches)-1:
             eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
             print(f'eval_loss = {float(eval_loss)}')
-            outf.write(str({'eval_loss' : float(eval_loss)})+'\n')
-            outf.flush()
+            outs.write(str({'eval_loss' : float(eval_loss)})+'\n')
+            outs.flush()
 
-    outf.close()
+    outs.close()
             
     return trainable_state_dict
 
