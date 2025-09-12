@@ -253,9 +253,10 @@ class SimpleDoraConfig(PeftStrategyConfig):
     def wrap(self,model):
         reducedim = 0 if self.transpose else 1
         class LinearWithSimpleDoraTranspose(torch.nn.Module):
-            def __init__(self, linear, r):
+            def __init__(self, linear, r, transpose, eps):
                 super().__init__()
                 assert linear.bias is None
+                self.transpose = transpose
                 self.eps = eps
                 W = linear.weight.T
                 mag = torch.sqrt(W.float().pow(2).mean(dim=reducedim,keepdim=True) + self.eps)
@@ -270,7 +271,7 @@ class SimpleDoraConfig(PeftStrategyConfig):
                 if self.transpose:
                     y = y * self.mag
                 return y
-        return wrap_linear(model,functools.partial(LinearWithSimpleDoraTranspose, r=self.r))
+        return wrap_linear(model,functools.partial(LinearWithSimpleDoraTranspose, r=self.r, transpose=self.transpose, eps=self.eps))
 
 @PeftStrategyConfig.register_subclass('svdora')
 @dataclass

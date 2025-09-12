@@ -42,6 +42,8 @@ def write_configs():
             for transpose in [False,True]:
                 c.peft_config = peft.DoraConfig(r=r,transpose=transpose)
                 write1(c)
+                c.peft_config = peft.SimpleDoraConfig(r=r,transpose=transpose)
+                write1(c)
                 
         for r in [2,4,8,16]:
             c.peft_config = peft.SvdoraConfig(rU=r,rV=r)
