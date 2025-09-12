@@ -81,6 +81,7 @@ pkgs.mkShell {
     datasets
     # evaluate
     # scikit-learn
+    bokeh
       
     accelerate
     transformers
