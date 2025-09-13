@@ -6,6 +6,7 @@ from bokeh.layouts import column, row
 from bokeh.transform import factor_cmap, factor_mark, linear_cmap, log_cmap
 from bokeh.models import HoverTool, OpenURL, TapTool
 from bokeh.embed import file_html
+import pandas as pd
 import math
 
 def load_data(smoothing_half_life=250):
@@ -19,6 +20,7 @@ def load_data(smoothing_half_life=250):
         'peft_params' : [],
         'peft_cfg' : [],
         'peak_learning_rate' : [],
+        'work' : []
     }
 
     # hash keyed, values are dicts with keys 'iteration', 'loss', 'type'
@@ -58,7 +60,7 @@ def load_data(smoothing_half_life=250):
             continue
         if loss > 2.0 or test_loss > 2.0:
             continue
-        iterations_by_hash[base] = iterations
+        iterations_by_hash[base] = pd.DataFrame(iterations)
                     
         data['hash'].append(base)
         data['peft_type'].append(peft_cfg['type'])
@@ -68,8 +70,10 @@ def load_data(smoothing_half_life=250):
         data['peft_params'].append(info['peft_params'])
         data['peft_cfg'].append(yaml.dump(peft_cfg, default_flow_style=False, sort_keys=False))
         data['peak_learning_rate'].append(cfg['peak_learning_rate'])
+        data['work'].append('previous' if peft_cfg['type'] == 'lora' or 
+                            (peft_cfg['type'] == 'dora' and not peft_cfg['transpose']) else 'current')
 
-    return data, iterations_by_hash
+    return pd.DataFrame(data), iterations_by_hash
         
 def plot_run(iterations):
     p = figure(title = None, background_fill_color="#fafafa", tooltips="#@iteration: @loss")
@@ -86,27 +90,39 @@ def plot_all_runs(data):
                 tooltips="params: @peft_params @peft_cfg lr: @peak_learning_rate")
     p1.xaxis.axis_label = 'train loss'
     p1.yaxis.axis_label = 'test loss'
-    p1.scatter('train_loss', 'test_loss', source=data, size=5,
-             color = log_cmap('peft_params', 'Turbo256', min(data['peft_params']), max(data['peft_params'])))
+    for peft_type in data['peft_type'].unique():
+        curdata = data[data['peft_type'] == peft_type]
+        p1.scatter('train_loss', 'test_loss', source=curdata, size=5, legend_label=peft_type,
+                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()))
               # color = factor_cmap('peft_type', 'Category10_6', sorted(set(data['peft_type']))))
+    p1.legend.click_policy="hide"
     p1.select(type=TapTool).callback = OpenURL(url="runs/@hash.html")
               
     p2 = figure(title = None, background_fill_color="#fafafa", tools=tools, 
-                tooltips="params: @peft_params @peft_cfg lr: @peak_learning_rate")
+                tooltips="params: @peft_params @peft_cfg lr: @peak_learning_rate",
+                x_axis_type='log')
     p2.xaxis.axis_label = 'peft params'
     p2.yaxis.axis_label = 'test loss'
-    p2.scatter('peft_params', 'test_loss', source=data, size=5,
-             color = log_cmap('peft_params', 'Turbo256', min(data['peft_params']), max(data['peft_params'])))
-              # color = factor_cmap('peft_type', 'Category10_6', sorted(set(data['peft_type']))))
+    for peft_type in data['peft_type'].unique():
+        curdata = data[data['peft_type'] == peft_type]
+        p2.scatter('peft_params', 'test_loss', source=curdata, size=5, legend_label=peft_type,
+                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()))
+                  # color = factor_cmap('peft_type', 'Category10_6', sorted(set(data['peft_type']))))
+    p2.legend.click_policy="hide"
     p2.select(type=TapTool).callback = OpenURL(url="runs/@hash.html")
     
     p3 = figure(title = None, background_fill_color="#fafafa", tools=tools, 
-                tooltips="params: @peft_params @peft_cfg lr: @peak_learning_rate")
+                tooltips="params: @peft_params @peft_cfg lr: @peak_learning_rate",
+                x_axis_type='log')
     p3.xaxis.axis_label = 'peft params'
     p3.yaxis.axis_label = 'train loss'
-    p3.scatter('peft_params', 'train_loss', source=data, size=5,
-             color = log_cmap('peft_params', 'Turbo256', min(data['peft_params']), max(data['peft_params'])))
-              # color = factor_cmap('peft_type', 'Category10_6', sorted(set(data['peft_type']))))
+    for peft_type in data['peft_type'].unique():
+        curdata = data[data['peft_type'] == peft_type]
+        p3.scatter('peft_params', 'train_loss', source=curdata, size=5, legend_label=peft_type,
+                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()))
+                  # color = factor_cmap('peft_type', 'Category10_6', sorted(set(data['peft_type']))))
+    # p3.legend.location="top_left"
+    p3.legend.click_policy="hide"
     p3.select(type=TapTool).callback = OpenURL(url="runs/@hash.html")
     
     return row(p1, p2, p3)

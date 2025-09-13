@@ -199,7 +199,7 @@ def train_jax(model_torch, lm_dataset, cfg, outs):
     epoch_its = len(batches) // cfg.epochs
     
     schedule = optax.schedules.warmup_cosine_decay_schedule(cfg.peak_learning_rate/10, cfg.peak_learning_rate, 
-                                                            warmup_steps = len(batches) // 5, decay_steps=len(batches))
+                                                            warmup_steps = len(batches) // 20, decay_steps=len(batches))
     # schedule = optax.schedules.cosine_decay_schedule(cfg.peak_learning_rate, decay_steps=len(batches))
     # optimizer = optax.adam(schedule)
     # optimizer = optax.adamw(schedule)
