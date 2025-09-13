@@ -26,7 +26,7 @@ def load_data(smoothing_half_life=250):
 
     for out in glob('data/*.out'):
         print('reading',out)
-        base = out.lstrip('data/').rstrip('.out')
+        base = out[5:-4]
         cfg_file = f'configs/{base}.yaml'
         cfg = yaml.safe_load(open(cfg_file))
         peft_cfg = cfg['peft_config']
