@@ -63,7 +63,7 @@ def wrap_like_linear(model,f_factory):
 # here defining our fine tune (consider a << in_features, b << out_features, l
 # << n). For the special case l = n, a simpler implementation without loss of
 # expressivity is avaiable in get_tied_lora_extra_wrapper
-def create_tensor_embedding_wrapper(in_features, out_features, a, b, l, premult, postmult, dtype):
+def create_tensor_embedding_wrapper(in_features, out_features, a, b, l, premult, postmult, dtype, alpha):
     T = torch.nn.Parameter(torch.randn(a, b, l, dtype=dtype))
     A = torch.nn.Parameter(torch.randn(a, in_features, dtype=dtype))
     B = torch.nn.Parameter(torch.zeros(b, out_features, dtype=dtype))
@@ -78,27 +78,30 @@ def create_tensor_embedding_wrapper(in_features, out_features, a, b, l, premult,
             self.B = B
             self.M = torch.nn.Parameter(torch.randn(l, dtype=dtype))
             if premult:
-                self.pre = torch.nn.Parameter(torch.ones(in_features,dtype=dtype) * (1 if postmult else 0))
+                self.pre = torch.nn.Parameter(torch.ones(in_features,dtype=dtype))
             if postmult:
                 self.post = torch.nn.Parameter(torch.ones(out_features,dtype=dtype))
         def forward(self, x):
-            return self.linear(x) + torch.einsum('...i,ai,bo,l,abl,i,o->...o', x, self.A, self.B, self.M, self.T,
+            return self.linear(x) + alpha / np.sqrt(a*b*l) *\
+                    torch.einsum('...i,ai,bo,l,abl,i,o->...o', x, self.A, self.B, self.M, self.T,
                                                  self.pre if premult else torch.ones((1,),dtype=dtype),
                                                  self.post if postmult else torch.ones((1,),dtype=dtype))
-    return functools.partial(LinearWithTensorEmbedding, T=T, A=A, B=B)
+    return functools.partial(LinearWithTensorEmbedding, T=T, A=A, B=B, alpha=alpha)
 @PeftStrategyConfig.register_subclass('tensor_embedding')
 @dataclass
 class TensorEmbeddingConfig(PeftStrategyConfig):
-    a: int = 8
-    b: int = 8
+    a: int = 16
+    b: int = 16
     l: int = 8
     premult: bool = False
     postmult: bool = False
+    alpha: float = 3.
     def wrap(self,model):
         return wrap_like_linear(model, functools.partial(create_tensor_embedding_wrapper, a=self.a, b=self.b, l=self.l, 
-                                                     premult=self.premult, postmult=self.postmult, dtype=model.dtype))
+                                                     premult=self.premult, postmult=self.postmult, dtype=model.dtype,
+                                                         alpha=self.alpha))
     
-def create_tied_lora_extra_wrapper(in_features, out_features, a, b, premult, postmult, dtype):
+def create_tied_lora_extra_wrapper(in_features, out_features, a, b, premult, postmult, dtype, alpha):
     A = torch.nn.Parameter(torch.randn(a, in_features, dtype=dtype))
     B = torch.nn.Parameter(torch.zeros(b, out_features, dtype=dtype))
     class LinearWithTiedLoraExtra(torch.nn.Module):
@@ -115,22 +118,25 @@ def create_tied_lora_extra_wrapper(in_features, out_features, a, b, premult, pos
             if postmult:
                 self.post = torch.nn.Parameter(torch.ones(out_features,dtype=dtype))
         def forward(self, x):
-            return self.linear(x) + torch.einsum('...i,ai,ab,bo,i,o->...o', x, self.A, self.M, self.B,
+            return self.linear(x) + alpha / np.sqrt(a*b) *\
+                    torch.einsum('...i,ai,ab,bo,i,o->...o', x, self.A, self.M, self.B,
                                                  self.pre if premult else torch.ones((1,),dtype=dtype),
                                                  self.post if postmult else torch.ones((1,),dtype=dtype))
     return functools.partial(LinearWithTiedLoraExtra, A=A, B=B)
 @PeftStrategyConfig.register_subclass('tied_lora_extra')
 @dataclass
 class TiedLoraExtraConfig(PeftStrategyConfig):
-    a: int = 8
-    b: int = 8
+    a: int = 16
+    b: int = 16
     premult: bool = False
     postmult: bool = False
+    alpha: float = 3.
     def wrap(self,model):
         return wrap_like_linear(model, functools.partial(create_tied_lora_extra_wrapper, a=self.a, b=self.b, 
-                                                     premult=self.premult, postmult=self.postmult, dtype=model.dtype))
+                                                     premult=self.premult, postmult=self.postmult, 
+                                                     dtype=model.dtype, alpha=self.alpha))
     
-def create_tied_lora_wrapper(in_features, out_features, r, premult, postmult, dtype):
+def create_tied_lora_wrapper(in_features, out_features, r, premult, postmult, dtype, alpha):
     A = torch.nn.Parameter(torch.randn(in_features, r, dtype=dtype))
     B = torch.nn.Parameter(torch.zeros(r, out_features, dtype=dtype))
     class LinearWithTiedLoraExtra(torch.nn.Module):
@@ -147,21 +153,24 @@ def create_tied_lora_wrapper(in_features, out_features, r, premult, postmult, dt
             if postmult:
                 self.post = torch.nn.Parameter(torch.ones(out_features,dtype=dtype))
         def forward(self, x):
-            return self.linear(x) + torch.einsum('...i,ir,r,ro,i,o->...o', x, self.A, self.M, self.B,
+            return self.linear(x) + alpha / np.sqrt(r) *\
+                    torch.einsum('...i,ir,r,ro,i,o->...o', x, self.A, self.M, self.B,
                                                  self.pre if premult else torch.ones((1,),dtype=dtype),
                                                  self.post if postmult else torch.ones((1,),dtype=dtype))
     return functools.partial(LinearWithTiedLoraExtra, A=A, B=B)
 @PeftStrategyConfig.register_subclass('tied_lora')
 @dataclass
 class TiedLoraConfig(PeftStrategyConfig):
-    r: int = 8
+    r: int = 16
     premult: bool = False
     postmult: bool = True
+    alpha: float = 3.
     def wrap(self,model):
         return wrap_like_linear(model, functools.partial(create_tied_lora_wrapper, r=self.r,
-                                                 premult=self.premult, postmult=self.postmult, dtype=model.dtype))
+                                                 premult=self.premult, postmult=self.postmult, 
+                                                 dtype=model.dtype, alpha=self.alpha))
 
-def create_partially_tied_lora_wrapper(in_features, out_features, r, la, lb, premult, midmult, postmult, dtype):
+def create_partially_tied_lora_wrapper(in_features, out_features, r, la, lb, premult, midmult, postmult, dtype, alpha):
     A = torch.nn.Parameter(torch.randn(in_features, r, la, dtype=dtype))
     B = torch.nn.Parameter(torch.zeros(r, out_features, lb, dtype=dtype))
     class LinearWithTiedLoraExtra(torch.nn.Module):
@@ -181,7 +190,8 @@ def create_partially_tied_lora_wrapper(in_features, out_features, r, la, lb, pre
             if postmult:
                 self.post = torch.nn.Parameter(torch.ones(out_features,dtype=dtype))
         def forward(self, x):
-            return self.linear(x) + torch.einsum('...i,irA,roB,A,B,i,r,o->...o', x, self.A, self.B, self.MA, self.MB, 
+            return self.linear(x) + alpha / np.sqrt(r*la*lb) *\
+                    torch.einsum('...i,irA,roB,A,B,i,r,o->...o', x, self.A, self.B, self.MA, self.MB, 
                              self.pre if premult else torch.ones((1,),dtype=dtype),
                              self.mid if midmult else torch.ones((1,),dtype=dtype),
                              self.post if postmult else torch.ones((1,),dtype=dtype))
@@ -195,25 +205,29 @@ class PartiallyTiedLoraConfig(PeftStrategyConfig):
     premult: bool = False
     midmult: bool = False
     postmult: bool = False
+    alpha: float = 3.
     def wrap(self,model):
         return wrap_like_linear(model, functools.partial(create_partially_tied_lora_wrapper, r=self.r, la=self.la, lb=self.lb,
-                                                 premult=self.premult, midmult=self.midmult, postmult=self.postmult, dtype=model.dtype))
+                                                 premult=self.premult, midmult=self.midmult, postmult=self.postmult, 
+                                                 dtype=model.dtype, alpha=self.alpha))
 
 @PeftStrategyConfig.register_subclass('lora')
 @dataclass
 class LoraConfig(PeftStrategyConfig):
     r: int = 8
+    alpha: float = 3.
     def wrap(self,model):
         class LinearWithLoRA(torch.nn.Module):
-            def __init__(self, linear, r):
+            def __init__(self, linear, r, alpha):
                 super().__init__()
                 assert linear.bias is None
                 self.linear = linear
+                self.alpha = alpha
                 self.A = torch.nn.Parameter(torch.randn(linear.in_features, r, dtype=linear.weight.dtype))
                 self.B = torch.nn.Parameter(torch.zeros(r, linear.out_features, dtype=linear.weight.dtype))
             def forward(self, x):
-                return self.linear(x) + x @ self.A @ self.B
-        return wrap_linear(model,functools.partial(LinearWithLoRA, r=self.r))
+                return self.linear(x) + (x @ self.A @ self.B) * self.alpha / np.sqrt(tuple(self.A.shape)[1])
+        return wrap_linear(model,functools.partial(LinearWithLoRA, r=self.r, alpha=self.alpha))
 
 @PeftStrategyConfig.register_subclass('dora')
 @dataclass
@@ -226,8 +240,10 @@ class DoraConfig(PeftStrategyConfig):
         # we fix input dimension as 0 and output dimension as 1 to agree with matrices acting on the right
         reducedim = 0 if self.transpose else 1
         scaledim_name = 'o' if self.transpose else 'i'
+        r = self.r
+        alpha = self.alpha
         class LinearWithDora(torch.nn.Module):
-            def __init__(self, linear, r, eps):
+            def __init__(self, linear, eps):
                 super().__init__()
                 assert linear.bias is None
                 self.eps = eps
@@ -238,11 +254,11 @@ class DoraConfig(PeftStrategyConfig):
                 self.A = torch.nn.Parameter(torch.randn(linear.in_features, r, dtype = W.dtype))
                 self.B = torch.nn.Parameter(torch.zeros(r, linear.out_features, dtype = W.dtype))
             def forward(self, x):
-                Wtune = self.W + self.A @ self.B
+                Wtune = self.W + alpha / np.sqrt(r) * self.A @ self.B
                 mult = torch.rsqrt(Wtune.pow(2).mean(dim=reducedim) + self.eps)
                 mult *= self.mag
                 return torch.einsum(f'...i,io,{scaledim_name}->...o', x, Wtune, mult)
-        return wrap_linear(model,functools.partial(LinearWithDora, r=self.r, eps=self.eps))
+        return wrap_linear(model,functools.partial(LinearWithDora, eps=self.eps))
 
 @PeftStrategyConfig.register_subclass('simple_dora')
 @dataclass
@@ -250,10 +266,13 @@ class SimpleDoraConfig(PeftStrategyConfig):
     r: int = 8
     transpose: bool = False
     eps: float = 1e-6
+    alpha: float = 30.
     def wrap(self,model):
         reducedim = 0 if self.transpose else 1
+        r = self.r
+        alpha = self.alpha
         class LinearWithSimpleDoraTranspose(torch.nn.Module):
-            def __init__(self, linear, r, transpose, eps):
+            def __init__(self, linear, transpose, eps):
                 super().__init__()
                 assert linear.bias is None
                 self.transpose = transpose
@@ -267,11 +286,11 @@ class SimpleDoraConfig(PeftStrategyConfig):
             def forward(self, x):
                 if not self.transpose:
                     x = x * self.mag
-                y = x @ self.W + x @ self.A @ self.B
+                y = x @ self.W + alpha / np.sqrt(r) * x @ self.A @ self.B
                 if self.transpose:
                     y = y * self.mag
                 return y
-        return wrap_linear(model,functools.partial(LinearWithSimpleDoraTranspose, r=self.r, transpose=self.transpose, eps=self.eps))
+        return wrap_linear(model,functools.partial(LinearWithSimpleDoraTranspose, transpose=self.transpose, eps=self.eps))
 
 @PeftStrategyConfig.register_subclass('svdora')
 @dataclass
