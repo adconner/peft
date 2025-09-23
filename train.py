@@ -41,7 +41,8 @@ class PeftTrainConfig:
     seed : int = 0
     logging_steps : int = 250
     # peak_learning_rate :int = 1.5e-5 # lora
-    peak_learning_rate : float = 7.5e-6
+    peak_learning_rate : float = 3e-5
+    # peak_learning_rate : float = 7.5e-5
     weight_decay : float = 0.001
 
 def train_peft(cfg):
