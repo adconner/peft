@@ -9,45 +9,44 @@ def write_configs():
         open('configs/'+hex(abs(hash(cur))).lstrip('0x')+'.yaml','w').write(cur)
         
     c = train.PeftTrainConfig()
-    lr = c.peak_learning_rate
-    for l in [lr, lr/10, lr*10]:
-        c.peak_learning_rate = l
-        
-        for r in [4,8,16]:
-            for l in [2,4,8,16]:
-                for postmult in [False, True]:
-                    c.peft_config = peft.TensorEmbeddingConfig(a=r, b=r, l=l, postmult=postmult)
-                    write1(c)
-                        
-        for r in [4,8,16]:
+    
+    for r in [8,32,128]:
+        for l in [4,8,16]:
             for postmult in [False, True]:
-                c.peft_config = peft.TiedLoraExtraConfig(a=r, b=r, postmult=postmult)
+                c.peft_config = peft.TensorEmbeddingConfig(a=r, b=r, l=l, postmult=postmult)
                 write1(c)
                     
-        for r in [4,8,16]:
-            for postmult in [False, True]:
-                c.peft_config = peft.TiedLoraConfig(r=r, postmult=postmult)
-                write1(c)
-                    
-        for r in [4,8,16]:
-            for (la,lb) in [(2,2), (4,4), (8,8), (8,1), (1,8)]:
-                c.peft_config = peft.PartiallyTiedLoraConfig(r=r,la=la,lb=lb)
-                write1(c)
-                            
-        for r in [4,8,16]:
-            c.peft_config = peft.LoraConfig(r=r)
+    for r in [8,32,128]:
+        for postmult in [False, True]:
+            c.peft_config = peft.TiedLoraExtraConfig(a=r, b=r, postmult=postmult)
             write1(c)
-                        
-        for r in [4,8,16]:
-            for transpose in [False,True]:
-                c.peft_config = peft.DoraConfig(r=r,transpose=transpose)
-                write1(c)
-                c.peft_config = peft.SimpleDoraConfig(r=r,transpose=transpose)
-                write1(c)
                 
-        for r in [2,4,8,16]:
-            c.peft_config = peft.SvdoraConfig(rU=r,rV=r)
+    for r in [8,32,128]:
+        for postmult in [False, True]:
+            c.peft_config = peft.TiedLoraConfig(r=r, postmult=postmult)
             write1(c)
+                
+    for r in [8,32,128]:
+        for (la,lb) in [(2,2), (4,4), (8,8)]:
+            c.peft_config = peft.PartiallyTiedLoraConfig(r=r,la=la,lb=lb)
+            write1(c)
+                        
+    for r in [4,8,16]:
+        c.peft_config = peft.LoraConfig(r=r)
+        c.peft_config = peft.NormedLoraConfig(r=r)
+        write1(c)
+                    
+    for r in [4,8,16]:
+        c.peft_config = peft.DoraConfig(r=r,transpose=False)
+        write1(c)
+        for transpose in [False,True]:
+            for beta in [1., 30., 100.]:
+                c.peft_config = peft.SimpleDoraConfig(r=r,transpose=transpose,beta=beta)
+                write1(c)
+            
+    # for r in [2,4,8,16]:
+    #     c.peft_config = peft.SvdoraConfig(rU=r,rV=r)
+    #     write1(c)
 
 
 if __name__=='__main__':

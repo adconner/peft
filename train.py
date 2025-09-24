@@ -25,8 +25,8 @@ os.environ['XLA_FLAGS'] = (
 
 @dataclass
 class PeftTrainConfig:
-    peft_config: peft.PeftStrategyConfig = field(default_factory=peft.LoraConfig)
-    # peft_config: peft.PeftStrategyConfig = field(default_factory=peft.TensorEmbeddingConfig)
+    # peft_config: peft.PeftStrategyConfig = field(default_factory=peft.LoraConfig)
+    peft_config: peft.PeftStrategyConfig = field(default_factory=peft.TensorEmbeddingConfig)
     
     model_name : str = 'google/gemma-2b'
     # model_name : str = 'NousResearch/Llama-3.2-1B'
@@ -40,12 +40,11 @@ class PeftTrainConfig:
     batchsize : int = 1
     seed : int = 0
     logging_steps : int = 250
-    # peak_learning_rate :int = 1.5e-5 # lora
     peak_learning_rate : float = 3e-5
-    # peak_learning_rate : float = 7.5e-5
-    weight_decay : float = 0.001
+    weight_decay : float = 0.0001
 
 def train_peft(cfg):
+    print(cfg)
     model = AutoModelForCausalLM.from_pretrained(cfg.model_name, dtype='auto')
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters in model : {model_params}")
@@ -136,11 +135,15 @@ def train_jax(model_torch, lm_dataset, cfg, outs):
         maxex = max([len(ex['input_ids']) for ex in split])
         # bs = [1]
         # bs = [1,2]
-        bs = [1,2,3,4]
+        bs = [2]
+        # bs = [1,2,3,4]
         split_by_b = { }
         for ex in split:
-            b = next(b for b in reversed(bs) if len(ex['input_ids']) <= maxex/b**0.9)
-            split_by_b.setdefault(b,[]).append(ex)
+            try:
+                b = next(b for b in reversed(bs) if len(ex['input_ids']) <= maxex/b**0.9)
+                split_by_b.setdefault(b,[]).append(ex)
+            except StopIteration:
+                pass
         print(f'{len(split_by_b)} groups of batches by example length')
         print(sorted([(b,len(exs),max(len(ex['input_ids']) for ex in exs)) for b, exs in split_by_b.items()])) 
         batches = []
@@ -199,8 +202,9 @@ def train_jax(model_torch, lm_dataset, cfg, outs):
     batches = [batch for key in jax.random.split(key, cfg.epochs) for batch in get_batches(key)]
     epoch_its = len(batches) // cfg.epochs
     
-    schedule = optax.schedules.warmup_cosine_decay_schedule(cfg.peak_learning_rate/10, cfg.peak_learning_rate, 
-                                                            warmup_steps = len(batches) // 20, decay_steps=len(batches))
+    schedule = optax.schedules.constant_schedule(cfg.peak_learning_rate)
+    # schedule = optax.schedules.warmup_cosine_decay_schedule(cfg.peak_learning_rate/10, cfg.peak_learning_rate, 
+    #                                                         warmup_steps = len(batches) // 20, decay_steps=len(batches))
     # schedule = optax.schedules.cosine_decay_schedule(cfg.peak_learning_rate, decay_steps=len(batches))
     # optimizer = optax.adam(schedule)
     # optimizer = optax.adamw(schedule)

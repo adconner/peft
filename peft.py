@@ -96,7 +96,7 @@ class TensorEmbeddingConfig(PeftStrategyConfig):
     l: int = 8
     premult: bool = False
     postmult: bool = False
-    alpha: float = 100.
+    alpha: float = 30.
     def wrap(self,model):
         return wrap_like_linear(model, functools.partial(create_tensor_embedding_wrapper, a=self.a, b=self.b, l=self.l, 
                                                      premult=self.premult, postmult=self.postmult, dtype=model.dtype,
@@ -132,7 +132,7 @@ class TiedLoraExtraConfig(PeftStrategyConfig):
     b: int = 16
     premult: bool = False
     postmult: bool = False
-    alpha: float = 100.
+    alpha: float = 30.
     def wrap(self,model):
         return wrap_like_linear(model, functools.partial(create_tied_lora_extra_wrapper, a=self.a, b=self.b, 
                                                      premult=self.premult, postmult=self.postmult, 
@@ -167,7 +167,7 @@ class TiedLoraConfig(PeftStrategyConfig):
     r: int = 16
     premult: bool = False
     postmult: bool = True
-    alpha: float = 100.
+    alpha: float = 30.
     def wrap(self,model):
         return wrap_like_linear(model, functools.partial(create_tied_lora_wrapper, r=self.r,
                                                  premult=self.premult, postmult=self.postmult, 
@@ -209,7 +209,7 @@ class PartiallyTiedLoraConfig(PeftStrategyConfig):
     premult: bool = False
     midmult: bool = False
     postmult: bool = False
-    alpha: float = 100.
+    alpha: float = 30.
     def wrap(self,model):
         return wrap_like_linear(model, functools.partial(create_partially_tied_lora_wrapper, r=self.r, la=self.la, lb=self.lb,
                                                  premult=self.premult, midmult=self.midmult, postmult=self.postmult, 
@@ -239,7 +239,7 @@ class LoraConfig(PeftStrategyConfig):
 @dataclass
 class NormedLoraConfig(PeftStrategyConfig):
     r: int = 8
-    alpha: float = 100.
+    alpha: float = 30.
     def wrap(self,model):
         r = self.r
         alpha = self.alpha
@@ -262,11 +262,12 @@ class DoraConfig(PeftStrategyConfig):
     r: int = 8
     transpose: bool = False
     eps: float = 1e-6
+    alpha: float = 30.
     def wrap(self,model):
         # ordinary dora scales the input (so reduces in the output dimension)
         # we fix input dimension as 0 and output dimension as 1 to agree with matrices acting on the right
-        reducedim = 0 if self.transpose else 1
-        scaledim_name = 'o' if self.transpose else 'i'
+        reducedim = 1 if self.transpose else 0
+        scaledim_name = 'i' if self.transpose else 'o'
         r = self.r
         alpha = self.alpha
         class LinearWithDora(torch.nn.Module):
@@ -276,7 +277,8 @@ class DoraConfig(PeftStrategyConfig):
                 self.eps = eps
                 W = linear.weight.T
                 mag = torch.sqrt(W.float().pow(2).mean(dim=reducedim) + self.eps).type_as(W)
-                self.W = torch.nn.Parameter(W.contiguous(), requires_grad = False)
+                self.W = torch.nn.Parameter(W.contiguous() / float(np.sqrt(W.float().pow(2).mean())),
+                                            requires_grad = False)
                 self.mag = torch.nn.Parameter(mag)
                 self.A = torch.nn.Parameter(torch.randn(linear.in_features, r, dtype = W.dtype))
                 self.B = torch.nn.Parameter(torch.zeros(r, linear.out_features, dtype = W.dtype))
@@ -294,10 +296,12 @@ class SimpleDoraConfig(PeftStrategyConfig):
     transpose: bool = False
     eps: float = 1e-6
     alpha: float = 30.
+    beta: float = 1. # mag learning rate boost
     def wrap(self,model):
-        reducedim = 0 if self.transpose else 1
+        reducedim = 1 if self.transpose else 0
         r = self.r
         alpha = self.alpha
+        beta = self.beta
         class LinearWithSimpleDoraTranspose(torch.nn.Module):
             def __init__(self, linear, transpose, eps):
                 super().__init__()
@@ -307,15 +311,15 @@ class SimpleDoraConfig(PeftStrategyConfig):
                 W = linear.weight.T
                 mag = torch.sqrt(W.float().pow(2).mean(dim=reducedim,keepdim=True) + self.eps)
                 self.W = torch.nn.Parameter((W.float() / mag).type_as(W).contiguous(), requires_grad = False)
-                self.imag = torch.nn.Parameter(mag.type_as(W).squeeze(),requires_grad=False)
-                self.mag = torch.nn.Parameter(torch.ones(mag.shape,dtype=W.dtype))
+                self.imag = torch.nn.Parameter(mag.type_as(W).squeeze() * beta,requires_grad=False)
+                self.mag = torch.nn.Parameter(torch.ones(self.imag.shape,dtype=W.dtype) / beta)
                 self.A = torch.nn.Parameter(torch.randn(linear.in_features, r, dtype = W.dtype))
                 self.B = torch.nn.Parameter(torch.zeros(r, linear.out_features, dtype = W.dtype))
             def forward(self, x):
-                if not self.transpose:
+                if self.transpose:
                     x = x * self.imag * self.mag
                 y = x @ self.W + alpha / np.sqrt(r) * x @ self.A @ self.B
-                if self.transpose:
+                if not self.transpose:
                     y = y * self.imag * self.mag
                 return y
         return wrap_linear(model,functools.partial(LinearWithSimpleDoraTranspose, transpose=self.transpose, eps=self.eps))
