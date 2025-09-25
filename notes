@@ -22,3 +22,6 @@ config -> parameter sweeep
 inference friendly architecture -> attention on previous tokens in later layers restricted to earlier layers
 
 factor pre or post factor
+
+test:
+check alpha

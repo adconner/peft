@@ -5,7 +5,7 @@ let
   #   config.allowUnfree = true;
   #   config.cudaSupport = true;
   # };
-  pkgs = import <nixpkgs> {
+  pkgs = import (fetchTarball "https://github.com/NixOS/nixpkgs/tarball/e9f00bd893984bc8ce46c895c3bf7cac95331127") { 
     overlays = [
       (self: super: {
         pythonPackagesExtensions = super.pythonPackagesExtensions ++ [

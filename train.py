@@ -1,3 +1,9 @@
+import os
+os.environ['XLA_FLAGS'] = (
+    '--xla_gpu_triton_gemm_any=True '
+    '--xla_gpu_enable_latency_hiding_scheduler=true '
+)
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.97'
 
 from transformers import AutoModelForCausalLM, TrainingArguments, Trainer, AutoTokenizer
 import torch
@@ -17,17 +23,15 @@ import yaml
 
 import peft
 
-import os
-os.environ['XLA_FLAGS'] = (
-    '--xla_gpu_triton_gemm_any=True '
-    '--xla_gpu_enable_latency_hiding_scheduler=true '
-)
 
 @dataclass
 class PeftTrainConfig:
     peft_config: peft.PeftStrategyConfig = field(default_factory=peft.LoraConfig)
     
-    model_name : str = 'google/gemma-2b'
+    # model_name : str = 'google/gemma-2b'
+    model_name : str = 'meta-llama/Llama-3.1-8B'
+    # model_name : str = 'google/gemma-7b'
+    # model_name : str = 'NousResearch/Llama-2-7b-hf'
     # model_name : str = 'NousResearch/Llama-3.2-1B'
     
     dataset_randomize : bool = False
@@ -180,7 +184,8 @@ def train_jax(model_torch, lm_dataset, cfg, outs):
     def update_function(trainable_state_dict, opt_state, nontrainable_state_dict, input_ids, id_mask):
         (loss, tokens), grads = jax.value_and_grad(loss_fn,has_aux=True)(
                 trainable_state_dict,nontrainable_state_dict,input_ids,id_mask)
-        grad_norm_square = jnp.sqrt(jax.tree.reduce(operator.add, jax.tree.map(lambda e: jnp.sum(e**2), grads)))
+        grad_norm_square = jax.tree.map(lambda e: jnp.sum(e**2), grads)
+        # grad_norm_square = jnp.sqrt(jax.tree.reduce(operator.add, jax.tree.map(lambda e: jnp.sum(e**2), grads)))
         updates, opt_state = optimizer.update(grads, opt_state, trainable_state_dict)
         trainable_state_dict = optax.apply_updates(trainable_state_dict, updates)
         return loss, tokens, grad_norm_square, trainable_state_dict, opt_state
@@ -212,26 +217,29 @@ def train_jax(model_torch, lm_dataset, cfg, outs):
     opt_state = optimizer.init(trainable_state_dict)
 
     cum_loss = 0.0
-    cum_grad_norm_square = 0.0
+    cum_grad_norm_square = None
     n = 0
     for it,batch in tqdm(enumerate(batches),total=len(batches)):
         loss, tokens, grad_norm_square, trainable_state_dict, opt_state = update_function(
                 trainable_state_dict, opt_state, nontrainable_state_dict, *batch
             )
         cum_loss += float(loss)
-        cum_grad_norm_square += float(grad_norm_square)
+        cum_grad_norm_square = jax.tree.map(lambda e: float(e), grad_norm_square) if \
+            cum_grad_norm_square is None else jax.tree.map(lambda e,f: e+float(f), cum_grad_norm_square, grad_norm_square)
         n += int(tokens)
-        outs.write(str({'loss' : float(loss), 'grad_norm_square' : float(grad_norm_square), 'tokens' : int(tokens)})+'\n')
+        outs.write(str({'loss' : float(loss), 'grad_norm_square' : jax.tree.reduce(operator.add,grad_norm_square), 'tokens' : int(tokens)})+'\n')
         outs.flush()
         if it % cfg.logging_steps == cfg.logging_steps-1 or it == len(batches)-1:
             print({'loss' : cum_loss / n, 
                    'learning_rate' : float(schedule(it)), 
-                   'grad_norm' : float(np.sqrt(cum_grad_norm_square / n)),
+                   'grad_norm' : float(np.sqrt(jax.tree.reduce(operator.add,cum_grad_norm_square) / n)),
                    'epoch' : it / epoch_its })
+            # for k,v in jax.tree.map(lambda e: np.sqrt(e), cum_grad_norm_square).items():
+            #     print(k,v)
             if cum_loss / n > 2.0:
                 break
             cum_loss = 0.0
-            cum_grad_norm_square = 0.0
+            cum_grad_norm_square = None
             n = 0
         if it % epoch_its == epoch_its-1 or it == len(batches)-1:
             eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
