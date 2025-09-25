@@ -75,14 +75,71 @@ def load_data(smoothing_half_life=250):
 
     return pd.DataFrame(data), iterations_by_hash
         
-def plot_run(iterations):
+def plot_run(iterations, data):
+    hash, peft_type, train_loss, test_loss, model_params, peft_params, peft_cfg, peak_learning_rate = data
     p = figure(title = None, background_fill_color="#fafafa", tooltips="#@iteration: @loss")
               # tools="hover", tooltips="@iteration: @loss")
     p.xaxis.axis_label = 'iteration'
     p.yaxis.axis_label = 'cross entropy per token (bits)'
     p.scatter('iteration', 'loss', source=iterations,
               color = factor_cmap('type', 'Category10_3', ['train', 'test']))
-    return p
+    
+    template = '''    
+{% from macros import embed %}
+<!DOCTYPE html>
+<html lang="en">
+  {% block head %}
+  <head>
+  {% block inner_head %}
+    <meta charset="utf-8">
+    <title>{% block title %}{{ title | e if title else "Bokeh Plot" }}{% endblock %}</title>
+  {%  block preamble -%}{%- endblock %}
+  {%  block resources %}
+    <style>
+      html, body {
+        box-sizing: border-box;
+        display: flow-root;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+      }
+    </style>
+  {%   block css_resources -%}
+    {{- bokeh_css if bokeh_css }}
+  {%-  endblock css_resources %}
+  {%   block js_resources -%}
+    {{  bokeh_js if bokeh_js }}
+  {%-  endblock js_resources %}
+  {%  endblock resources %}
+  {%  block postamble %}{% endblock %}
+  {% endblock inner_head %}
+  </head>
+  {% endblock head%}
+  {% block body %}
+  <body>
+  {{ pre_content }}
+  {%  block inner_body %}
+  {%    block contents %}
+  {%      for doc in docs %}
+  {{        embed(doc) if doc.elementid }}
+  {%-       for root in doc.roots %}
+  {%          block root scoped %}
+  {{            embed(root) }}
+  {%          endblock %}
+  {%        endfor %}
+  {%      endfor %}
+  {%    endblock contents %}
+  {{ plot_script | indent(4) }}
+  {%  endblock inner_body %}
+  {{ post_content }}
+  </body>
+  {% endblock body%}
+</html>
+'''
+    return file_html(p, title=peft_cfg, template=template,
+                              template_variables={'pre_content' : 
+                              f'<pre><code>{open('configs/'+hash+'.yaml').read()}</code></pre>',
+                                                  'post_content' : ''})
 
 def plot_all_runs(data):
     tools='hover,tap,box_select,box_zoom,wheel_zoom,reset'
@@ -93,7 +150,8 @@ def plot_all_runs(data):
     for peft_type in data['peft_type'].unique():
         curdata = data[data['peft_type'] == peft_type]
         p1.scatter('train_loss', 'test_loss', source=curdata, size=5, legend_label=peft_type,
-                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()))
+                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()),
+                   marker = factor_mark('work',['circle', 'triangle'],['current', 'previous']))
               # color = factor_cmap('peft_type', 'Category10_6', sorted(set(data['peft_type']))))
     p1.legend.click_policy="hide"
     p1.select(type=TapTool).callback = OpenURL(url="runs/@hash.html")
@@ -106,7 +164,8 @@ def plot_all_runs(data):
     for peft_type in data['peft_type'].unique():
         curdata = data[data['peft_type'] == peft_type]
         p2.scatter('peft_params', 'test_loss', source=curdata, size=5, legend_label=peft_type,
-                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()))
+                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()),
+                   marker = factor_mark('work',['circle', 'triangle'],['current', 'previous']))
                   # color = factor_cmap('peft_type', 'Category10_6', sorted(set(data['peft_type']))))
     p2.legend.click_policy="hide"
     p2.select(type=TapTool).callback = OpenURL(url="runs/@hash.html")
@@ -119,7 +178,8 @@ def plot_all_runs(data):
     for peft_type in data['peft_type'].unique():
         curdata = data[data['peft_type'] == peft_type]
         p3.scatter('peft_params', 'train_loss', source=curdata, size=5, legend_label=peft_type,
-                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()))
+                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()),
+                   marker = factor_mark('work',['circle', 'triangle'],['current', 'previous']))
                   # color = factor_cmap('peft_type', 'Category10_6', sorted(set(data['peft_type']))))
     # p3.legend.location="top_left"
     p3.legend.click_policy="hide"
@@ -135,15 +195,13 @@ def main(prefix='.'):
     print(f'writing {outf}')
     with open(outf,'w') as f:
         f.write(file_html(model,title="Peft runs"))
-    for hash, peft_type, train_loss, test_loss, model_params, peft_params, peft_cfg, peak_learning_rate in zip(data['hash'], data['peft_type'], data['train_loss'], data['test_loss'], data['model_params'], data['peft_params'], data['peft_cfg'], data['peak_learning_rate']):
-        iterations = iterations_by_hash[hash]
-        model = plot_run(iterations)
+    for data in zip(data['hash'], data['peft_type'], data['train_loss'], data['test_loss'], data['model_params'], data['peft_params'], data['peft_cfg'], data['peak_learning_rate']):
+        hash, peft_type, train_loss, test_loss, model_params, peft_params, peft_cfg, peak_learning_rate = data
+        html = plot_run(iterations_by_hash[hash], data)
         outf = f'{prefix}/runs/{hash}.html'
         print(f'writing {outf}')
         with open(outf,'w') as f:
-            f.write(file_html(model, title=peft_cfg,
-                              template_variables={'inner_body' : 
-                              f'<code>{open('configs/'+hash+'.yaml').read()}</code>'}))
+            f.write(html)
 
 if __name__ == '__main__':
     main()
