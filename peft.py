@@ -97,7 +97,7 @@ class TensorEmbeddingConfig(PeftStrategyConfig):
     premult: bool = False
     postmult: bool = False
     alpha: float = 100.
-    gamma: float = 1000.
+    gamma: float = 750.
     def wrap(self,model):
         return wrap_like_linear(model, functools.partial(create_tensor_embedding_wrapper, a=self.a, b=self.b, l=self.l, 
                                                      premult=self.premult, postmult=self.postmult, dtype=model.dtype,
@@ -134,7 +134,7 @@ class TiedLoraExtraConfig(PeftStrategyConfig):
     premult: bool = False
     postmult: bool = False
     alpha: float = 100.
-    gamma: float = 1000.
+    gamma: float = 750.
     def wrap(self,model):
         return wrap_like_linear(model, functools.partial(create_tied_lora_extra_wrapper, a=self.a, b=self.b, 
                                                      premult=self.premult, postmult=self.postmult, 
@@ -170,7 +170,7 @@ class TiedLoraConfig(PeftStrategyConfig):
     premult: bool = False
     postmult: bool = True
     alpha: float = 100.
-    gamma: float = 1000.
+    gamma: float = 750.
     def wrap(self,model):
         return wrap_like_linear(model, functools.partial(create_tied_lora_wrapper, r=self.r,
                                                  premult=self.premult, postmult=self.postmult, 
@@ -213,7 +213,7 @@ class PartiallyTiedLoraConfig(PeftStrategyConfig):
     midmult: bool = False
     postmult: bool = False
     alpha: float = 100.
-    gamma: float = 1000.
+    gamma: float = 750.
     def wrap(self,model):
         return wrap_like_linear(model, functools.partial(create_partially_tied_lora_wrapper, r=self.r, la=self.la, lb=self.lb,
                                                  premult=self.premult, midmult=self.midmult, postmult=self.postmult, 
@@ -246,7 +246,7 @@ class LoraConfig(PeftStrategyConfig):
 class NormedLoraConfig(PeftStrategyConfig):
     r: int = 8
     alpha: float = 100.
-    gamma: float = 1000.
+    gamma: float = 750.
     def wrap(self,model):
         r = self.r
         alpha = self.alpha
@@ -307,7 +307,7 @@ class SimpleDoraConfig(PeftStrategyConfig):
     eps: float = 1e-6
     alpha: float = 100.
     beta: float = 1. # mag learning rate boost
-    gamma: float = 1000.
+    gamma: float = 750.
     def wrap(self,model):
         reducedim = 1 if self.transpose else 0
         r = self.r
