@@ -1,0 +1,27 @@
+lora partial rebake, maybe after epochs
+
+DORA generalize: QR, or polar decomposition
+tied-lora is tensor rank decomposition followed by rescalings on particular groupings of factors, can rescale on all groupings
+can make tensor implicitly restricted from in VERA trainable also
+
+large contexts makes ai worse, better position encoding, hierarchical? sort of dynamic tokenization with hierarchical attention
+dynamic position encoding, like lc0
+
+
+chess:
+transformer lc0 can also consume search tree descendants, dynamic puct
+
+full fine tune possible? gradient checkpointing
+properly exclude embedding/decoding?
+
+better initialization. choice of stdev
+can all factors be nonzero?
+
+config -> parameter sweeep
+
+inference friendly architecture -> attention on previous tokens in later layers restricted to earlier layers
+
+factor pre or post factor
+
+test:
+check alpha
