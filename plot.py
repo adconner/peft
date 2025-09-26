@@ -4,7 +4,7 @@ import yaml
 from bokeh.plotting import figure, show
 from bokeh.layouts import column, row
 from bokeh.transform import factor_cmap, factor_mark, linear_cmap, log_cmap
-from bokeh.models import HoverTool, OpenURL, TapTool
+from bokeh.models import HoverTool, OpenURL, TapTool, CDSView, ColumnDataSource, GroupFilter
 from bokeh.embed import file_html
 import pandas as pd
 import math
@@ -82,7 +82,9 @@ def plot_run(iterations, data):
     p.xaxis.axis_label = 'iteration'
     p.yaxis.axis_label = 'cross entropy per token (bits)'
     p.scatter('iteration', 'loss', source=iterations,
-              color = factor_cmap('type', 'Category10_3', ['train', 'test']))
+              color = factor_cmap('type', 'Category10_3', ['train', 'test']),
+               # size = pd.Series(2, index=iterations['type'].index).where(iterations['type'] == 'test',1)
+              )
     
     template = '''    
 {% from macros import embed %}
@@ -142,49 +144,58 @@ def plot_run(iterations, data):
                                                   'post_content' : ''})
 
 def plot_all_runs(data):
+    peft_types = sorted(data['peft_type'].unique())
+    source = ColumnDataSource(data)
     tools='hover,tap,box_select,box_zoom,wheel_zoom,reset'
     p1 = figure(title = None, background_fill_color="#fafafa", tools=tools, 
                 tooltips="params: @peft_params @peft_cfg lr: @peak_learning_rate")
     p1.xaxis.axis_label = 'train loss'
     p1.yaxis.axis_label = 'test loss'
-    for peft_type in data['peft_type'].unique():
-        curdata = data[data['peft_type'] == peft_type]
-        p1.scatter('train_loss', 'test_loss', source=curdata, size=5, legend_label=peft_type,
-                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()),
-                   marker = factor_mark('work',['circle', 'triangle'],['current', 'previous']))
-              # color = factor_cmap('peft_type', 'Category10_6', sorted(set(data['peft_type']))))
-    p1.legend.click_policy="hide"
-    p1.select(type=TapTool).callback = OpenURL(url="runs/@hash.html")
               
     p2 = figure(title = None, background_fill_color="#fafafa", tools=tools, 
                 tooltips="params: @peft_params @peft_cfg lr: @peak_learning_rate",
                 x_axis_type='log')
     p2.xaxis.axis_label = 'peft params'
     p2.yaxis.axis_label = 'test loss'
-    for peft_type in data['peft_type'].unique():
-        curdata = data[data['peft_type'] == peft_type]
-        p2.scatter('peft_params', 'test_loss', source=curdata, size=5, legend_label=peft_type,
-                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()),
-                   marker = factor_mark('work',['circle', 'triangle'],['current', 'previous']))
-                  # color = factor_cmap('peft_type', 'Category10_6', sorted(set(data['peft_type']))))
-    p2.legend.click_policy="hide"
-    p2.select(type=TapTool).callback = OpenURL(url="runs/@hash.html")
     
     p3 = figure(title = None, background_fill_color="#fafafa", tools=tools, 
                 tooltips="params: @peft_params @peft_cfg lr: @peak_learning_rate",
                 x_axis_type='log')
     p3.xaxis.axis_label = 'peft params'
     p3.yaxis.axis_label = 'train loss'
-    for peft_type in data['peft_type'].unique():
-        curdata = data[data['peft_type'] == peft_type]
-        p3.scatter('peft_params', 'train_loss', source=curdata, size=5, legend_label=peft_type,
+    
+    for peft_type in peft_types:
+        view = CDSView(filter=GroupFilter(column_name='peft_type', group=peft_type)) 
+        s1 = p1.scatter('train_loss', 'test_loss', source=source, view=view, size=8, legend_label=peft_type, line_color='black',
                  color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()),
                    marker = factor_mark('work',['circle', 'triangle'],['current', 'previous']))
-                  # color = factor_cmap('peft_type', 'Category10_6', sorted(set(data['peft_type']))))
-    # p3.legend.location="top_left"
-    p3.legend.click_policy="hide"
-    p3.select(type=TapTool).callback = OpenURL(url="runs/@hash.html")
+        s2 = p2.scatter('peft_params', 'test_loss', source=source, view=view, size=8, line_color='black',
+                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()),
+                   marker = factor_mark('work',['circle', 'triangle'],['current', 'previous']))
+        s3 = p3.scatter('peft_params', 'train_loss', source=source, view=view, size=8, line_color='black',
+                 color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()),
+                   marker = factor_mark('work',['circle', 'triangle'],['current', 'previous']))
+        # s1.js_link('hidden', s2, 'hidden')
+        # s1.js_link('hidden', s3, 'hidden')
+        s1.js_link('visible', s2, 'visible')
+        s1.js_link('visible', s3, 'visible')
+        
+    # p1.legend.location="top_left"
+    p1.legend.click_policy='hide'
     
+    tt = p1.select(type=TapTool)
+    # tt.behavior = 'inspect'
+    tt.callback = OpenURL(url="runs/@hash.html")
+        
+    tt = p2.select(type=TapTool)
+    tt.behavior = 'inspect'
+    tt.callback = OpenURL(url="runs/@hash.html")
+    
+    tt = p3.select(type=TapTool)
+    tt.behavior = 'inspect'
+    tt.callback = OpenURL(url="runs/@hash.html")
+    
+    # return p1,p2,p3
     return row(p1, p2, p3)
 
 def main(prefix='.'):
