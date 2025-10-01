@@ -31,9 +31,15 @@ def write_configs():
             write1(c)
                         
     for r in [4,8,16]:
-        c.peft_config = peft.LoraConfig(r=r)
+        c.peft_config = peft.LoraConfig(r=r,gamma=1.)
         write1(c)
-        c.peft_config = peft.NormedLoraConfig(r=r)
+        c.peft_config = peft.LoraConfig(r=r,gamma=750.)
+        write1(c)
+        c.peft_config = peft.NormedLoraConfig(r=r,gamma=1.)
+        write1(c)
+        c.peft_config = peft.NormedLoraConfig(r=r,gamma=750.)
+        write1(c)
+        c.peft_config = peft.StrongGammaLoraConfig(r=r,gamma=750.)
         write1(c)
                     
     for r in [4,8,16]:
@@ -42,7 +48,7 @@ def write_configs():
         c.peft_config = peft.SimpleDoraConfig(r=r,transpose=False)
         write1(c)
             
-    # for r in [2,4,8,16]:
+    # for r in [2,4,8]:
     #     c.peft_config = peft.SvdoraConfig(rU=r,rV=r)
     #     write1(c)
 

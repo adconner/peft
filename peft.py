@@ -241,6 +241,29 @@ class LoraConfig(PeftStrategyConfig):
                 return self.linear(x) + gamma * alpha / np.sqrt(r) * (x @ self.A @ self.B)
         return wrap_linear(model,functools.partial(LinearWithLoRA, r=self.r, alpha=self.alpha))
     
+@PeftStrategyConfig.register_subclass('strong_gamma_lora')
+@dataclass
+class StrongGammaLoraConfig(PeftStrategyConfig):
+    r: int = 8
+    alpha: float = 3.
+    gamma: float = 750.
+    def wrap(self,model):
+        r = self.r
+        alpha = self.alpha
+        gamma = self.gamma
+        class LinearWithLoRA(torch.nn.Module):
+            def __init__(self, linear, r, alpha):
+                super().__init__()
+                assert linear.bias is None
+                self.linear = linear
+                self.alpha = alpha
+                self.A = torch.nn.Parameter(torch.randn(linear.in_features, r, dtype=linear.weight.dtype) / gamma)
+                self.B = torch.nn.Parameter(torch.zeros(r, linear.out_features, dtype=linear.weight.dtype))
+            def forward(self, x):
+                return self.linear(x) + torch.minimum(torch.tensor(gamma).type_as(self.B), self.B.pow(2).mean().rsqrt()).detach() * \
+                        alpha / np.sqrt(r) * (x @ self.A @ self.B)
+        return wrap_linear(model,functools.partial(LinearWithLoRA, r=self.r, alpha=self.alpha))
+    
 @PeftStrategyConfig.register_subclass('normed_lora')
 @dataclass
 class NormedLoraConfig(PeftStrategyConfig):

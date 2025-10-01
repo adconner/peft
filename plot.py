@@ -43,6 +43,8 @@ def load_data(smoothing_half_life=250):
             info = eval(l1)
             iteration = 1
             for l in outf:
+                if 'nan' in l:
+                    break
                 l = eval(l)
                 iterations['iteration'].append(iteration)
                 if 'eval_loss' in l:
