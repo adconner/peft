@@ -228,7 +228,6 @@ def train_jax(model_torch, lm_dataset, cfg, outs):
             cum_grad_norm_square is None else jax.tree.map(lambda e,f: e+float(f), cum_grad_norm_square, grad_norm_square)
         n += int(tokens)
         outs.write(str({'loss' : float(loss), 'grad_norm_square' : jax.tree.reduce(operator.add,grad_norm_square), 'tokens' : int(tokens)})+'\n')
-        outs.flush()
         if it % cfg.logging_steps == cfg.logging_steps-1 or it == len(batches)-1:
             print({'loss' : cum_loss / n, 
                    'learning_rate' : float(schedule(it)), 
@@ -245,7 +244,6 @@ def train_jax(model_torch, lm_dataset, cfg, outs):
             eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
             print(f'eval_loss = {float(eval_loss)}')
             outs.write(str({'eval_loss' : float(eval_loss)})+'\n')
-            outs.flush()
 
     outs.close()
             
