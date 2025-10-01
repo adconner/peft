@@ -60,7 +60,9 @@ def train_peft(cfg):
     dataset = get_dataset_gsm8k(cfg)
     
     basename = yaml.dump(draccus.encode(cfg), default_flow_style=False, sort_keys=False)
-    outs = open(cfg.out_dir+'/'+hex(abs(hash(basename))).lstrip('0x')+'.out','w')
+    outf = cfg.out_dir+'/'+hex(abs(hash(basename))).lstrip('0x')+'.out'
+    print(f'Writing results to {outf}')
+    outs = open(outf,'w')
     outs.write(str({'model_params' : model_params, 'peft_params' : peft_params})+'\n')
     
     # train(peft_model, dataset, OUT_DIR)
@@ -216,30 +218,40 @@ def train_jax(model_torch, lm_dataset, cfg, outs):
     
     opt_state = optimizer.init(trainable_state_dict)
 
-    cum_loss = 0.0
-    cum_grad_norm_square = None
-    n = 0
+    losses = []
+    grad_norm_squares = []
+    tokenss = []
     for it,batch in tqdm(enumerate(batches),total=len(batches)):
         loss, tokens, grad_norm_square, trainable_state_dict, opt_state = update_function(
                 trainable_state_dict, opt_state, nontrainable_state_dict, *batch
             )
-        cum_loss += float(loss)
-        cum_grad_norm_square = jax.tree.map(lambda e: float(e), grad_norm_square) if \
-            cum_grad_norm_square is None else jax.tree.map(lambda e,f: e+float(f), cum_grad_norm_square, grad_norm_square)
-        n += int(tokens)
-        outs.write(str({'loss' : float(loss), 'grad_norm_square' : jax.tree.reduce(operator.add,grad_norm_square), 'tokens' : int(tokens)})+'\n')
+        losses.append(loss)
+        grad_norm_squares.append(grad_norm_square)
+        tokenss.append(tokens)
         if it % cfg.logging_steps == cfg.logging_steps-1 or it == len(batches)-1:
-            print({'loss' : cum_loss / n, 
+            cum_loss = 0.0
+            cum_grad_norm_square = None
+            ntokens = 0
+            for loss, grad_norm_square, tokens in zip(losses, grad_norm_squares, tokenss):
+                loss = float(loss)
+                grad_norm_square = jax.tree.map(lambda e: float(e), grad_norm_square)
+                tokens = int(tokens)
+                outs.write(str({'loss' : loss, 'grad_norm_square' : sum(grad_norm_square.values()), 'tokens' : tokens})+'\n')
+                cum_loss += loss
+                cum_grad_norm_square = grad_norm_square if cum_grad_norm_square is None else \
+                        jax.tree.map(operator.add, cum_grad_norm_square, grad_norm_square)
+                ntokens += tokens
+            print({'loss' : cum_loss / ntokens, 
                    'learning_rate' : float(schedule(it)), 
-                   'grad_norm' : float(np.sqrt(jax.tree.reduce(operator.add,cum_grad_norm_square) / n)),
+                   'grad_norm' : float(np.sqrt(jax.tree.reduce(operator.add,cum_grad_norm_square) / ntokens)),
                    'epoch' : it / epoch_its })
             # for k,v in jax.tree.map(lambda e: np.sqrt(e), cum_grad_norm_square).items():
             #     print(k,v)
-            if cum_loss / n > 2.0:
+            if cum_loss / ntokens > 2.0:
                 break
-            cum_loss = 0.0
-            cum_grad_norm_square = None
-            n = 0
+            losses = []
+            grad_norm_squares = []
+            tokenss = []
         if it % epoch_its == epoch_its-1 or it == len(batches)-1:
             eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
             print(f'eval_loss = {float(eval_loss)}')
