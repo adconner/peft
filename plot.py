@@ -11,17 +11,7 @@ import math
 
 def load_data(smoothing_half_life=250):
     lam = math.pow(0.5,1/smoothing_half_life)
-    data = {
-        'hash': [],
-        'peft_type' : [],
-        'train_loss' : [],
-        'test_loss' : [],
-        'model_params' : [],
-        'peft_params' : [],
-        'peft_cfg' : [],
-        'peak_learning_rate' : [],
-        'work' : []
-    }
+    data = {}
 
     # hash keyed, values are dicts with keys 'iteration', 'loss', 'type'
     iterations_by_hash = {}
@@ -58,21 +48,20 @@ def load_data(smoothing_half_life=250):
                     iterations['loss'].append(loss)
                     iterations['type'].append('train')
                     iteration += 1
-        if len(iterations['loss']) < 2:
-            continue
-        if loss > 2.0 or test_loss > 2.0:
+        if len(iterations['loss']) < 2 or loss > 2.0 or test_loss > 2.0:
+            print(cfg, 'diverged or errored')
             continue
         iterations_by_hash[base] = pd.DataFrame(iterations)
                     
-        data['hash'].append(base)
-        data['peft_type'].append(peft_cfg['type'])
-        data['train_loss'].append(loss)
-        data['test_loss'].append(test_loss)
-        data['model_params'].append(info['model_params'])
-        data['peft_params'].append(info['peft_params'])
-        data['peft_cfg'].append(yaml.dump(peft_cfg, default_flow_style=False, sort_keys=False))
-        data['peak_learning_rate'].append(cfg['peak_learning_rate'])
-        data['work'].append('previous' if peft_cfg['type'] == 'lora' or 
+        data.setdefault('hash',[]).append(base)
+        data.setdefault('peft_type',[]).append(peft_cfg['type'])
+        data.setdefault('train_loss',[]).append(loss)
+        data.setdefault('test_loss',[]).append(test_loss)
+        data.setdefault('model_params',[]).append(info['model_params'])
+        data.setdefault('peft_params',[]).append(info['peft_params'])
+        data.setdefault('peft_cfg',[]).append(yaml.dump(peft_cfg, default_flow_style=False, sort_keys=False))
+        data.setdefault('peak_learning_rate',[]).append(cfg['peak_learning_rate'])
+        data.setdefault('work',[]).append('previous' if peft_cfg['type'] == 'lora' or 
                             (peft_cfg['type'] == 'dora' and not peft_cfg['transpose']) else 'current')
 
     return pd.DataFrame(data), iterations_by_hash
