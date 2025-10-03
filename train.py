@@ -247,7 +247,7 @@ def train_jax(model_torch, lm_dataset, cfg, outs):
                    'epoch' : it / epoch_its })
             # for k,v in jax.tree.map(lambda e: np.sqrt(e), cum_grad_norm_square).items():
             #     print(k,v)
-            if cum_loss / ntokens > 2.0:
+            if cum_loss / ntokens > 2.0 or not jnp.isfinite(cum_loss):
                 break
             losses = []
             grad_norm_squares = []
