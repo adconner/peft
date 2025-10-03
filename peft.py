@@ -275,18 +275,19 @@ class DoraConfig(PeftStrategyConfig):
     def wrap(self,model):
         # ordinary dora scales the input (so reduces in the output dimension)
         # we fix input dimension as 0 and output dimension as 1 to agree with matrices acting on the right
+        transpose = self.transpose
         reducedim = 1 if self.transpose else 0
-        scaledim_name = 'i' if self.transpose else 'o'
+        scaledim_name = 'i' if transpose else 'o'
+        eps = self.eps
         r = self.r
         alpha = self.alpha
         gamma = self.gamma
         class LinearWithDora(torch.nn.Module):
-            def __init__(self, linear, eps):
+            def __init__(self, linear):
                 super().__init__()
                 assert linear.bias is None
-                self.eps = eps
                 W = linear.weight.T
-                mag = torch.sqrt(W.float().pow(2).mean(dim=reducedim) + self.eps).type_as(W)
+                mag = torch.sqrt(W.float().pow(2).mean(dim=reducedim) + eps).type_as(W)
                 self.W = torch.nn.Parameter(W.contiguous() / float(np.sqrt(W.float().pow(2).mean())),
                                             requires_grad = False)
                 self.mag = torch.nn.Parameter(mag)
@@ -294,10 +295,9 @@ class DoraConfig(PeftStrategyConfig):
                 self.B = torch.nn.Parameter(torch.zeros(r, linear.out_features, dtype = W.dtype))
             def forward(self, x):
                 Wtune = self.W + gamma * alpha / np.sqrt(r) * self.A @ self.B
-                mult = torch.rsqrt(Wtune.pow(2).mean(dim=reducedim) + self.eps)
-                mult *= self.mag
-                return torch.einsum(f'...i,io,{scaledim_name}->...o', x, Wtune, mult)
-        return wrap_linear(model,functools.partial(LinearWithDora, eps=self.eps))
+                imag = torch.rsqrt(Wtune.pow(2).mean(dim=reducedim) + eps)
+                return torch.einsum(f'...i,io,{scaledim_name}->...o', x, Wtune, imag * self.mag)
+        return wrap_linear(model,functools.partial(LinearWithDora))
 
 @PeftStrategyConfig.register_subclass('simple_dora')
 @dataclass
@@ -309,56 +309,62 @@ class SimpleDoraConfig(PeftStrategyConfig):
     beta: float = 1. # mag learning rate boost
     gamma: float = 750.
     def wrap(self,model):
+        transpose = self.transpose
+        eps = self.eps
         reducedim = 1 if self.transpose else 0
         r = self.r
         alpha = self.alpha
         beta = self.beta
         gamma = self.gamma
         class LinearWithSimpleDoraTranspose(torch.nn.Module):
-            def __init__(self, linear, transpose, eps):
+            def __init__(self, linear):
                 super().__init__()
                 assert linear.bias is None
-                self.transpose = transpose
-                self.eps = eps
                 W = linear.weight.T
-                mag = torch.sqrt(W.float().pow(2).mean(dim=reducedim,keepdim=True) + self.eps)
+                mag = torch.sqrt(W.float().pow(2).mean(dim=reducedim,keepdim=True) + eps)
                 self.W = torch.nn.Parameter((W.float() / mag).type_as(W).contiguous(), requires_grad = False)
                 self.imag = torch.nn.Parameter(mag.type_as(W).squeeze() * beta,requires_grad=False)
                 self.mag = torch.nn.Parameter(torch.ones(self.imag.shape,dtype=W.dtype) / beta)
                 self.A = torch.nn.Parameter(torch.randn(linear.in_features, r, dtype = W.dtype) / gamma)
                 self.B = torch.nn.Parameter(torch.zeros(r, linear.out_features, dtype = W.dtype))
             def forward(self, x):
-                if self.transpose:
+                if transpose:
                     x = x * self.imag * self.mag
                 y = x @ self.W + gamma * alpha / np.sqrt(r) * x @ self.A @ self.B
-                if not self.transpose:
+                if not transpose:
                     y = y * self.imag * self.mag
                 return y
-        return wrap_linear(model,functools.partial(LinearWithSimpleDoraTranspose, transpose=self.transpose, eps=self.eps))
+        return wrap_linear(model,functools.partial(LinearWithSimpleDoraTranspose))
 
 @PeftStrategyConfig.register_subclass('svdora')
 @dataclass
 class SvdoraConfig(PeftStrategyConfig):
     rU: int = 8
     rV: int = 8
+    alpha: float = 100.
+    gamma: float = 750.
     def wrap(self,model):
+        alpha = self.alpha
+        gamma = self.gamma
+        rU = self.rU
+        rV = self.rV
         class LinearWithSimpleSvdora(torch.nn.Module):
-            def __init__(self, linear, rU, rV):
+            def __init__(self, linear):
                 super().__init__()
                 assert linear.bias is None
                 W = linear.weight.T
                 U, sigma, Vh = torch.linalg.svd(W.to(torch.float32), full_matrices=False)
                 print(sigma)
-                self.U = torch.nn.Parameter(U.to(W.dtype), requires_grad=False)
+                self.U = torch.nn.Parameter(U.to(W.dtype).contiguous(), requires_grad=False)
                 self.sigma = torch.nn.Parameter(sigma.to(W.dtype))
-                self.Vh = torch.nn.Parameter(Vh.to(W.dtype), requires_grad=False)
+                self.Vh = torch.nn.Parameter(Vh.to(W.dtype).contiguous(), requires_grad=False)
                 
-                self.A1 = torch.nn.Parameter(torch.randn(U.shape[0], rU, dtype = linear.weight.dtype))
+                self.A1 = torch.nn.Parameter(torch.randn(U.shape[0], rU, dtype = linear.weight.dtype)/gamma)
                 self.B1 = torch.nn.Parameter(torch.zeros(rU, U.shape[1], dtype = linear.weight.dtype))
-                self.A2 = torch.nn.Parameter(torch.randn(Vh.shape[0], rV, dtype = linear.weight.dtype))
+                self.A2 = torch.nn.Parameter(torch.randn(Vh.shape[0], rV, dtype = linear.weight.dtype)/gamma)
                 self.B2 = torch.nn.Parameter(torch.zeros(rV, Vh.shape[1], dtype = linear.weight.dtype))
             def forward(self, x):
-                x = x @ self.U + x @ self.A1 @ self.B1
+                x = x @ self.U + gamma * alpha / np.sqrt(rU * self.U.shape[1]) * (x @ self.A1 @ self.B1)
                 x = x * self.sigma
-                return x @ self.Vh + x @ self.A2 @ self.B2
-        return wrap_linear(model,functools.partial(LinearWithSimpleSvdora, rU=self.rU, rV=self.rV))
+                return x @ self.Vh + gamma * alpha / np.sqrt(rV * self.Vh.shape[0]) * x @ self.A2 @ self.B2
+        return wrap_linear(model,functools.partial(LinearWithSimpleSvdora))
