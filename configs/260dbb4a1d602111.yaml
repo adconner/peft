@@ -1,0 +1,15 @@
+peft_config:
+  type: normed_lora
+  r: 8
+  alpha: 23.62460713974418
+  gamma: 3.180512159113065
+model_name: google/gemma-2b
+dataset_randomize: false
+seq_len: 463
+out_dir: data
+epochs: 3
+batchsize: 1
+seed: 0
+logging_steps: 250
+peak_learning_rate: 6.0862984628788335e-05
+weight_decay: 0.001
