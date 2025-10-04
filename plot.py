@@ -12,20 +12,21 @@ import math
 def load_data(smoothing_half_life=250):
     lam = math.pow(0.5,1/smoothing_half_life)
     data = {}
+    iterations = {}
 
     # hash keyed, values are dicts with keys 'iteration', 'loss', 'type'
-    iterations_by_hash = {}
 
     for out in glob('data/*.out'):
         print('reading',out)
-        base = out[5:-4]
-        cfg_file = f'configs/{base}.yaml'
-        cfg = yaml.safe_load(open(cfg_file))
+        hash = out[5:-4]
+        cfg_file = f'configs/{hash}.yaml'
+        cfg_yaml = open(cfg_file).read()
+        cfg = yaml.safe_load(cfg_yaml)
         peft_cfg = cfg['peft_config']
 
-        iterations = { 'iteration' : [], 'loss' : [], 'type' : [] } 
         test_loss = 100.0
         loss = 0.0
+        diverged = False
         with open(out) as outf:
             l1 = outf.readline().strip()
             if l1 == '':
@@ -34,42 +35,53 @@ def load_data(smoothing_half_life=250):
             iteration = 1
             for l in outf:
                 if 'nan' in l:
+                    diverged = True
                     break
                 l = eval(l)
-                iterations['iteration'].append(iteration)
                 if 'eval_loss' in l:
                     test_loss = min(test_loss,l['eval_loss'])
-                    iterations['loss'].append(l['eval_loss'])
-                    iterations['type'].append('test')
+                    iterations.setdefault('hash',[]).append(hash)
+                    iterations.setdefault('iteration',[]).append(iteration)
+                    iterations.setdefault('loss',[]).append(l['eval_loss'])
+                    iterations.setdefault('type',[]).append('test')
+                    if l['eval_loss'] > 2.0:
+                        diverged = True
+                        break
                 else:
                     curloss = l['loss'] / l['tokens']
                     loss = curloss/iteration + (iteration-1)*loss / iteration if \
                             iteration < smoothing_half_life else (1-lam) * curloss  + lam * loss
-                    iterations['loss'].append(loss)
-                    iterations['type'].append('train')
+                    iterations.setdefault('hash',[]).append(hash)
+                    iterations.setdefault('iteration',[]).append(iteration)
+                    iterations.setdefault('loss',[]).append(loss)
+                    iterations.setdefault('type',[]).append('train')
                     iteration += 1
-        if len(iterations['loss']) < 2 or loss > 2.0 or test_loss > 2.0:
-            print(cfg, 'diverged or errored')
-            continue
-        iterations_by_hash[base] = pd.DataFrame(iterations)
+                    if loss > 2.0:
+                        diverged = True
+                        break
+        if iteration == 1:
+            print(cfg_yaml, 'no iterations (errored?), skipping')
                     
-        data.setdefault('hash',[]).append(base)
+        data.setdefault('hash',[]).append(hash)
+        data.setdefault('cfg',[]).append(str(cfg))
+        data.setdefault('cfg_yaml',[]).append(cfg_yaml)
+        data.setdefault('peft_cfg_yaml',[]).append(yaml.dump(peft_cfg, default_flow_style=False, sort_keys=False))
         data.setdefault('peft_type',[]).append(peft_cfg['type'])
         data.setdefault('train_loss',[]).append(loss)
         data.setdefault('test_loss',[]).append(test_loss)
         data.setdefault('model_params',[]).append(info['model_params'])
         data.setdefault('peft_params',[]).append(info['peft_params'])
-        data.setdefault('peft_cfg',[]).append(yaml.dump(peft_cfg, default_flow_style=False, sort_keys=False))
         data.setdefault('peak_learning_rate',[]).append(cfg['peak_learning_rate'])
         data.setdefault('alpha',[]).append(peft_cfg['alpha'])
         data.setdefault('gamma',[]).append(peft_cfg['gamma'])
         data.setdefault('work',[]).append('previous' if peft_cfg['type'] == 'lora' or 
                             (peft_cfg['type'] == 'dora' and not peft_cfg['transpose']) else 'current')
+        data.setdefault('diverged',[]).append(diverged)
 
-    return pd.DataFrame(data), iterations_by_hash
+    return pd.DataFrame(data), pd.DataFrame(iterations)
         
-def plot_run(iterations, data):
-    hash, peft_type, train_loss, test_loss, model_params, peft_params, peft_cfg, peak_learning_rate = data
+def plot_run(iterations, row):
+    iterations = ColumnDataSource(iterations[iterations['hash'] == row['hash']])
     p = figure(title = None, background_fill_color="#fafafa", tooltips="#@iteration: @loss")
               # tools="hover", tooltips="@iteration: @loss")
     p.xaxis.axis_label = 'iteration'
@@ -131,9 +143,9 @@ def plot_run(iterations, data):
   {% endblock body%}
 </html>
 '''
-    return file_html(p, title=peft_cfg, template=template,
+    return file_html(p, title=row['peft_cfg_yaml'], template=template,
                               template_variables={'pre_content' : 
-                              f'<pre><code>{open('configs/'+hash+'.yaml').read()}</code></pre>',
+                              f'<pre><code>{row['cfg_yaml']}</code></pre>',
                                                   'post_content' : ''})
 
 def plot_all_runs(data):
@@ -181,11 +193,11 @@ def plot_all_runs(data):
     tt.callback = OpenURL(url="runs/@hash.html")
         
     tt = p2.select(type=TapTool)
-    tt.behavior = 'inspect'
+    # tt.behavior = 'inspect'
     tt.callback = OpenURL(url="runs/@hash.html")
     
     tt = p3.select(type=TapTool)
-    tt.behavior = 'inspect'
+    # tt.behavior = 'inspect'
     tt.callback = OpenURL(url="runs/@hash.html")
     
     # return p1,p2,p3
@@ -193,16 +205,17 @@ def plot_all_runs(data):
 
 def main(prefix='.'):
     os.makedirs(f'{prefix}/runs',exist_ok=True)
-    data, iterations_by_hash = load_data()
+    data, iterations = load_data()
     model = plot_all_runs(data)
     outf = f'{prefix}/index.html'
     print(f'writing {outf}')
     with open(outf,'w') as f:
         f.write(file_html(model,title="Peft runs"))
-    for data in zip(data['hash'], data['peft_type'], data['train_loss'], data['test_loss'], data['model_params'], data['peft_params'], data['peft_cfg'], data['peak_learning_rate']):
-        hash, peft_type, train_loss, test_loss, model_params, peft_params, peft_cfg, peak_learning_rate = data
-        html = plot_run(iterations_by_hash[hash], data)
-        outf = f'{prefix}/runs/{hash}.html'
+    for ix,row in data.iterrows():
+        if row['diverged']:
+            continue
+        html = plot_run(iterations, row)
+        outf = f'{prefix}/runs/{row["hash"]}.html'
         print(f'writing {outf}')
         with open(outf,'w') as f:
             f.write(html)
