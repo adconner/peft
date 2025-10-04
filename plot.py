@@ -61,6 +61,8 @@ def load_data(smoothing_half_life=250):
         data.setdefault('peft_params',[]).append(info['peft_params'])
         data.setdefault('peft_cfg',[]).append(yaml.dump(peft_cfg, default_flow_style=False, sort_keys=False))
         data.setdefault('peak_learning_rate',[]).append(cfg['peak_learning_rate'])
+        data.setdefault('alpha',[]).append(peft_cfg['alpha'])
+        data.setdefault('gamma',[]).append(peft_cfg['gamma'])
         data.setdefault('work',[]).append('previous' if peft_cfg['type'] == 'lora' or 
                             (peft_cfg['type'] == 'dora' and not peft_cfg['transpose']) else 'current')
 

@@ -89,9 +89,9 @@ pkgs.mkShell {
       
     ipython
     ruff
-    # venvShellHook
+    venvShellHook
   ] ++ (with pkgs; [
     pyright
   ]);
-  # venvDir = ".venv";
+  venvDir = ".venv";
 }

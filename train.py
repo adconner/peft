@@ -28,8 +28,8 @@ import peft
 class PeftTrainConfig:
     peft_config: peft.PeftStrategyConfig = field(default_factory=peft.LoraConfig)
     
-    # model_name : str = 'google/gemma-2b'
-    model_name : str = 'meta-llama/Llama-3.1-8B'
+    model_name : str = 'google/gemma-2b'
+    # model_name : str = 'meta-llama/Llama-3.1-8B'
     # model_name : str = 'google/gemma-7b'
     # model_name : str = 'NousResearch/Llama-2-7b-hf'
     # model_name : str = 'NousResearch/Llama-3.2-1B'
@@ -66,7 +66,7 @@ def train_peft(cfg):
     outs.write(str({'model_params' : model_params, 'peft_params' : peft_params})+'\n')
     
     # train(peft_model, dataset, OUT_DIR)
-    train_jax(peft_model, dataset, cfg, outs)
+    return train_jax(peft_model, dataset, cfg, outs)
     
 class ModelWithLoss(torch.nn.Module): 
     def __init__(self, model):
@@ -218,6 +218,8 @@ def train_jax(model_torch, lm_dataset, cfg, outs):
     
     opt_state = optimizer.init(trainable_state_dict)
 
+    min_train_loss = 100.
+    min_test_loss = 100.
     losses = []
     grad_norm_squares = []
     tokenss = []
@@ -249,17 +251,19 @@ def train_jax(model_torch, lm_dataset, cfg, outs):
             #     print(k,v)
             if cum_loss / ntokens > 2.0 or not jnp.isfinite(cum_loss):
                 break
+            min_train_loss = min(min_train_loss, cum_loss / ntokens)
             losses = []
             grad_norm_squares = []
             tokenss = []
         if it % epoch_its == epoch_its-1 or it == len(batches)-1:
             eval_loss = evaluate(trainable_state_dict, nontrainable_state_dict)
+            min_test_loss = min(min_test_loss, eval_loss)
             print(f'eval_loss = {float(eval_loss)}')
             outs.write(str({'eval_loss' : float(eval_loss)})+'\n')
-
-    outs.close()
             
-    return trainable_state_dict
+    outs.close()
+    
+    return trainable_state_dict, min_train_loss, min_test_loss
 
 
 def get_dataset_gsm8k(cfg):
