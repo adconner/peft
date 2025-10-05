@@ -9,6 +9,12 @@ import draccus
 class PeftStrategyConfig(draccus.ChoiceRegistry):
     pass
 
+@PeftStrategyConfig.register_subclass('full')
+@dataclass
+class FullFineTuneConfig(PeftStrategyConfig):
+    def wrap(self,model):
+        return model
+
 # works for gemma
 def wrap_linear(model,f):
     for param in model.parameters():
