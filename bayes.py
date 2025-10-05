@@ -11,15 +11,15 @@ import plot
     
 def maximize_hyper(cfg):
     def pmap(alpha, gamma, peak_learning_rate):
-        return (float(np.log(alpha)), float(np.log(gamma)), float(np.log(peak_learning_rate)))
-    def imap(logalpha,loggamma,loglr):
-        return (float(np.exp(logalpha)), float(np.exp(loggamma)), float(np.exp(loglr)))
+        return (float(np.log(alpha)), float(np.log(gamma)+np.log(peak_learning_rate)), float(np.log(peak_learning_rate)))
+    def imap(logalpha,loggammalr,loglr):
+        return (float(np.exp(logalpha)), float(np.exp(loggammalr-loglr)), float(np.exp(loglr)))
     def lossmap(loss):
         return -loss+1
     
-    def f(logalpha,loggamma,loglr):
+    def f(logalpha,loggammalr,loglr):
         c = copy(cfg)
-        c.peft_config.alpha, c.peft_config.gamma, c.peak_learning_rate = imap(logalpha,loggamma,loglr)
+        c.peft_config.alpha, c.peft_config.gamma, c.peak_learning_rate = imap(logalpha,loggammalr,loglr)
         
         cur = yaml.dump(draccus.encode(c), default_flow_style=False, sort_keys=False)
         open('configs/'+hex(abs(hash(cur))).lstrip('0x')+'.yaml','w').write(cur)
@@ -33,7 +33,7 @@ def maximize_hyper(cfg):
     bo = bayes_opt.BayesianOptimization(
             f=f,
             pbounds = {"logalpha": (-1, 7),
-                       "loggamma": (0, 7.5),
+                       "loggammalr": (-10.4, -2.9),
                        "loglr": (-12.7, -8.1)},
             allow_duplicate_points = True
             )
