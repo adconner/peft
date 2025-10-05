@@ -11,15 +11,19 @@ import plot
     
 def maximize_hyper(cfg):
     def pmap(alpha, gamma, peak_learning_rate):
-        return (float(np.log(alpha)), float(np.log(gamma)+0.5*np.log(peak_learning_rate)), float(np.log(peak_learning_rate)))
-    def imap(logalpha,loggammalr,loglr):
-        return (float(np.exp(logalpha)), float(np.exp(loggammalr-0.5*loglr)), float(np.exp(loglr)))
+        return (float(np.log(alpha)+np.log(peak_learning_rate)), 
+                float(np.log(gamma)+0.5*np.log(peak_learning_rate)), 
+                float(np.log(peak_learning_rate)))
+    def imap(logalphalr,loggammalr,loglr):
+        return (float(np.exp(logalphalr-loglr)), 
+                float(np.exp(loggammalr-0.5*loglr)), 
+                float(np.exp(loglr)))
     def lossmap(loss):
         return -min(loss,2.)+1
     
-    def f(logalpha,loggammalr,loglr):
+    def f(**kwargs):
         c = copy(cfg)
-        c.peft_config.alpha, c.peft_config.gamma, c.peak_learning_rate = imap(logalpha,loggammalr,loglr)
+        c.peft_config.alpha, c.peft_config.gamma, c.peak_learning_rate = imap(**kwargs)
         
         cur = yaml.dump(draccus.encode(c), default_flow_style=False, sort_keys=False)
         outf = 'configs/'+hex(abs(hash(cur))).lstrip('0x')+'.yaml'
@@ -38,7 +42,7 @@ def maximize_hyper(cfg):
             # acquisition_function=bayes_opt.acquisition.ProbabilityOfImprovement(xi=1e-4), # prefer exploitation
             # acquisition_function=bayes_opt.acquisition.ExpectedImprovement(xi=0.0), # prefer exploitation
             acquisition_function=bayes_opt.acquisition.UpperConfidenceBound(kappa=0.1), # prefer exploitation
-            pbounds = {"logalpha": (2, 7),
+            pbounds = {"logalphalr": (-6.8, -4.3),
                        "loggammalr": (-1, 1.5),
                        "loglr": (-12.7, -8.1)},
             allow_duplicate_points = True,
@@ -71,7 +75,7 @@ def maximize_hyper(cfg):
     if probe_theta0_needed:
         bo.probe(ptheta0)
 
-    bo.maximize(init_points=0,n_iter=4)
+    bo.maximize(init_points=0,n_iter=10)
     print(bo.max)
     
 if __name__ == '__main__':
