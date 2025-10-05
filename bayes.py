@@ -10,6 +10,34 @@ import plot
 
     
 def maximize_hyper(cfg):
+    def pmap(alpha, gamma, peak_learning_rate):
+        return (float(np.log(alpha)), float(np.log(gamma)), float(np.log(peak_learning_rate)))
+    def imap(logalpha,loggamma,loglr):
+        return (float(np.exp(logalpha)), float(np.exp(loggamma)), float(np.exp(loglr)))
+    def lossmap(loss):
+        return -loss+1
+    
+    def f(logalpha,loggamma,loglr):
+        c = copy(cfg)
+        c.peft_config.alpha, c.peft_config.gamma, c.peak_learning_rate = imap(logalpha,loggamma,loglr)
+        
+        cur = yaml.dump(draccus.encode(c), default_flow_style=False, sort_keys=False)
+        open('configs/'+hex(abs(hash(cur))).lstrip('0x')+'.yaml','w').write(cur)
+
+        _, train_loss, test_loss = train.train_peft(c)
+        return lossmap(train_loss)
+
+    theta0 = (cfg.peft_config.alpha, cfg.peft_config.gamma, cfg.peak_learning_rate)
+    ptheta0 = pmap(*theta0)
+    
+    bo = bayes_opt.BayesianOptimization(
+            f=f,
+            pbounds = {"logalpha": (-1, 7),
+                       "loggamma": (0, 7.5),
+                       "loglr": (-12.7, -8.1)},
+            allow_duplicate_points = True
+            )
+    
     def normalize_cfg(cfg_dict):
         cfg_dict = deepcopy(cfg_dict)
         del cfg_dict['peft_config']['alpha']
@@ -21,46 +49,22 @@ def maximize_hyper(cfg):
     data, _  = plot.load_data()
     cfg_norm = normalize_cfg(cfg_dict)
 
-    sols = {}
+    probe_theta0_needed = True
     for ri,r in data.iterrows():
         cur_cfg_dict = eval(r['cfg'])
         if normalize_cfg(cur_cfg_dict) == cfg_norm:
-            sols[(np.log(cur_cfg_dict['peft_config']['alpha']),
-                  np.log(cur_cfg_dict['peft_config']['gamma']),
-                  np.log(cur_cfg_dict['peak_learning_rate']))] = r['train_loss']
-    print('previous solutions', sols)
-    
-    def f(logalpha, loggamma, loglr):
-        if (sol := sols.get((logalpha, loggamma, loglr),None)) != None:
-            return -sol
-        c = copy(cfg)
-        c.peft_config.alpha = float(np.exp(logalpha))
-        c.peft_config.gamma = float(np.exp(loggamma))
-        c.peak_learning_rate = float(np.exp(loglr))
-        
-        cur = yaml.dump(draccus.encode(c), default_flow_style=False, sort_keys=False)
-        open('configs/'+hex(abs(hash(cur))).lstrip('0x')+'.yaml','w').write(cur)
+            theta = (cur_cfg_dict['peft_config']['alpha'],
+                      cur_cfg_dict['peft_config']['gamma'],
+                      cur_cfg_dict['peak_learning_rate'])
+            ptheta = pmap(*theta)
+            if all(abs(e-f) < 1e-5 for e,f in zip(ptheta, ptheta0)):
+                probe_theta0_needed = False
+            bo.register(ptheta, lossmap(r['train_loss']))
 
-        _, train_loss, test_loss = train.train_peft(c)
-        return -train_loss
+    if probe_theta0_needed:
+        bo.probe(ptheta0)
 
-    logalpha0 = np.log(cfg.peft_config.alpha)
-    loggamma0 = np.log(cfg.peft_config.gamma)
-    loglr0 = np.log(cfg.peak_learning_rate)
-    
-    bo = bayes_opt.BayesianOptimization(
-            f=f,
-            pbounds = {"logalpha": (-1, 7),
-                       "loggamma": (0, 7.5),
-                       "loglr": (loglr0 - 2.3, loglr0 + 2.3)},
-            )
-
-    toprobe = set([(logalpha0, loggamma0, loglr0)]).union(sols)
-    for alpha, gamma, lr in toprobe:
-        bo.probe({"logalpha": alpha,
-                  "loggamma": gamma,
-                  "loglr": lr})
-    bo.maximize(10)
+    bo.maximize(4)
     print(bo.max)
     
 if __name__ == '__main__':
