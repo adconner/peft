@@ -22,8 +22,8 @@ def write_configs():
             write1(c)
                 
     for r in [8,32,128]:
-        c.peft_config = peft.TiedLoraConfig(r=r, postmult=True)
-        write1(c)
+         c.peft_config = peft.TiedLoraConfig(r=r)
+         write1(c)
                 
     for r in [8,32,128]:
         for (la,lb) in [(2,2), (4,4), (8,8)]:

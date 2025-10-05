@@ -92,6 +92,7 @@ pkgs.mkShell {
     venvShellHook
   ] ++ (with pkgs; [
     pyright
+    pandoc
   ]);
   venvDir = ".venv";
 }

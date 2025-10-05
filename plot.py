@@ -1,13 +1,20 @@
 import os
 from glob import glob
 import yaml
+import bokeh
 from bokeh.plotting import figure, show
 from bokeh.layouts import column, row
 from bokeh.transform import factor_cmap, factor_mark, linear_cmap, log_cmap
-from bokeh.models import HoverTool, OpenURL, TapTool, CDSView, ColumnDataSource, GroupFilter
-from bokeh.embed import file_html
+from bokeh.models import HoverTool, OpenURL, TapTool, CDSView, ColumnDataSource, GroupFilter, IntersectionFilter, UnionFilter, AllIndices, Select, MultiChoice, CustomJS
+from bokeh.embed import file_html, components
+from bokeh.resources import CDN, INLINE
+# from bokeh.palettes import Spectral6
+from jinja2 import Template
 import pandas as pd
+import numpy as np
 import math
+import subprocess
+from copy import deepcopy
 
 def load_data(smoothing_half_life=250):
     lam = math.pow(0.5,1/smoothing_half_life)
@@ -16,6 +23,26 @@ def load_data(smoothing_half_life=250):
 
     # hash keyed, values are dicts with keys 'iteration', 'loss', 'type'
 
+    best_train_loss = {}
+    best_test_loss = {}
+    def normalize_cfg(cfg_dict,previous):
+        cfg_dict = deepcopy(cfg_dict)
+        try:
+            del cfg_dict['peft_config']['alpha']
+            del cfg_dict['peft_config']['gamma']
+        except KeyError:
+            pass
+        del cfg_dict['peak_learning_rate']
+        del cfg_dict['weight_decay']
+        del cfg_dict['out_dir']
+        del cfg_dict['batchsize']
+        del cfg_dict['logging_steps']
+        del cfg_dict['seed']
+        del cfg_dict['dataset_randomize']
+        del cfg_dict['seq_len']
+        cfg_dict['peft_config'] = tuple(cfg_dict['peft_config'].items())
+        return (tuple(cfg_dict.items()),previous)
+
     for out in glob('data/*.out'):
         print('reading',out)
         hash = out[5:-4]
@@ -23,6 +50,8 @@ def load_data(smoothing_half_life=250):
         cfg_yaml = open(cfg_file).read()
         cfg = yaml.safe_load(cfg_yaml)
         peft_cfg = cfg['peft_config']
+        if peft_cfg['type'] == 'normed_lora':
+            peft_cfg['type'] = 'lora'
 
         test_loss = 100.0
         loss = 0.0
@@ -69,16 +98,32 @@ def load_data(smoothing_half_life=250):
         data.setdefault('peft_type',[]).append(peft_cfg['type'])
         data.setdefault('train_loss',[]).append(loss)
         data.setdefault('test_loss',[]).append(test_loss)
+        data.setdefault('model_name',[]).append(cfg['model_name'])
         data.setdefault('model_params',[]).append(info['model_params'])
         data.setdefault('peft_params',[]).append(info['peft_params'])
         data.setdefault('peak_learning_rate',[]).append(cfg['peak_learning_rate'])
-        data.setdefault('alpha',[]).append(peft_cfg['alpha'])
-        data.setdefault('gamma',[]).append(peft_cfg['gamma'])
-        data.setdefault('work',[]).append('previous' if peft_cfg['type'] == 'lora' or 
-                            (peft_cfg['type'] == 'dora' and not peft_cfg['transpose']) else 'current')
+        data.setdefault('alpha',[]).append(peft_cfg.get('alpha',None))
+        data.setdefault('gamma',[]).append(peft_cfg.get('gamma',None))
+        previous = peft_cfg.get('gamma',1.) == 1. and (peft_cfg['type'] in ['lora','full','tied-lora'] or 
+                            (peft_cfg['type'] == 'dora' and not peft_cfg['transpose']))
+        data.setdefault('work',[]).append('previous' if previous else 'current')
         data.setdefault('diverged',[]).append(diverged)
+        
+        cfg_norm = normalize_cfg(cfg,previous)
+        if loss < best_train_loss.get(cfg_norm,(None, 100.))[1]:
+            best_train_loss[cfg_norm] = (hash, loss)
+        if test_loss < best_test_loss.get(cfg_norm,(None, 100.))[1]:
+            best_test_loss[cfg_norm] = (hash, test_loss)
 
-    return pd.DataFrame(data), pd.DataFrame(iterations)
+    besthashes = set(hash for hash, _ in best_train_loss.values())
+    # besthashes = set(hash for hash, _ in best_train_loss.values()).union(set(hash for hash, _ in best_test_loss.values()))
+    data['best'] = ['True' if hash in besthashes else 'False' for hash in data['hash']]
+
+    data, iterations = pd.DataFrame(data), pd.DataFrame(iterations)
+    data['percent'] = 100. * data['peft_params'] / data['model_params']
+    data['diverged_str'] = np.where(data['diverged'], 'True', 'False')
+    data['True'] = 'True'
+    return data, iterations
         
 def plot_run(iterations, row):
     iterations = ColumnDataSource(iterations[iterations['hash'] == row['hash']])
@@ -148,37 +193,46 @@ def plot_run(iterations, row):
                               f'<pre><code>{row['cfg_yaml']}</code></pre>',
                                                   'post_content' : ''})
 
-def plot_all_runs(data):
-    peft_types = sorted(data['peft_type'].unique())
-    source = ColumnDataSource(data)
-    tools='hover,tap,box_select,box_zoom,wheel_zoom,reset'
+def plot_all_runs(data, source=None, filt=None):
+    if source is None:
+        source = ColumnDataSource(data)
+    if filt is None:
+        filt = AllIndices()
+        
+    filt = IntersectionFilter(operands=[filt,GroupFilter(column_name='diverged_str', group='False')])
+    # data['new'] = np.where(data['gamma'] == 960., 'yes', 'no')
+    tools='hover,tap,pan,box_select,wheel_zoom,reset'
     p1 = figure(title = None, background_fill_color="#fafafa", tools=tools, 
-                tooltips="params: @peft_params @peft_cfg lr: @peak_learning_rate")
-    p1.xaxis.axis_label = 'train loss'
-    p1.yaxis.axis_label = 'test loss'
+                tooltips="params: @peft_params (@percent %) @peft_cfg_yaml lr: @peak_learning_rate",
+                x_axis_type='log')
+    p1.xaxis.axis_label = 'peft params'
+    p1.yaxis.axis_label = 'train loss (bits)'
               
     p2 = figure(title = None, background_fill_color="#fafafa", tools=tools, 
-                tooltips="params: @peft_params @peft_cfg lr: @peak_learning_rate",
+                tooltips="params: @peft_params (@percent %) @peft_cfg_yaml lr: @peak_learning_rate",
                 x_axis_type='log')
     p2.xaxis.axis_label = 'peft params'
-    p2.yaxis.axis_label = 'test loss'
+    p2.yaxis.axis_label = 'test loss (bits)'
     
     p3 = figure(title = None, background_fill_color="#fafafa", tools=tools, 
-                tooltips="params: @peft_params @peft_cfg lr: @peak_learning_rate",
-                x_axis_type='log')
-    p3.xaxis.axis_label = 'peft params'
-    p3.yaxis.axis_label = 'train loss'
+                tooltips="params: @peft_params (@percent %) @peft_cfg_yaml lr: @peak_learning_rate")
+    p3.xaxis.axis_label = 'train loss (bits)'
+    p3.yaxis.axis_label = 'test loss (bits)'
     
-    for peft_type in peft_types:
-        view = CDSView(filter=GroupFilter(column_name='peft_type', group=peft_type)) 
-        s1 = p1.scatter('train_loss', 'test_loss', source=source, view=view, size=8, legend_label=peft_type, line_color='black',
+    for work in ['current', 'previous']:
+        curfilt = GroupFilter(column_name='work', group=work)
+        view = CDSView(filter=IntersectionFilter(operands=[filt,curfilt])) 
+        s1 = p1.scatter('peft_params', 'train_loss', source=source, view=view, size=8, legend_label=work, line_color='black',
                  color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()),
+                        # color=factor_cmap('new', palette='Spectral3', factors=['yes','no']),
                    marker = factor_mark('work',['circle', 'triangle'],['current', 'previous']))
         s2 = p2.scatter('peft_params', 'test_loss', source=source, view=view, size=8, line_color='black',
                  color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()),
+                        # color=factor_cmap('new', palette='Spectral3', factors=['yes','no']),
                    marker = factor_mark('work',['circle', 'triangle'],['current', 'previous']))
-        s3 = p3.scatter('peft_params', 'train_loss', source=source, view=view, size=8, line_color='black',
+        s3 = p3.scatter('train_loss', 'test_loss', source=source, view=view, size=8, line_color='black',
                  color = log_cmap('peft_params', 'Turbo256', data['peft_params'].min(), data['peft_params'].max()),
+                        # color=factor_cmap('new', palette='Spectral3', factors=['yes','no']),
                    marker = factor_mark('work',['circle', 'triangle'],['current', 'previous']))
         # s1.js_link('hidden', s2, 'hidden')
         # s1.js_link('hidden', s3, 'hidden')
@@ -203,14 +257,95 @@ def plot_all_runs(data):
     # return p1,p2,p3
     return row(p1, p2, p3)
 
+def make_main(data):
+    body = subprocess.check_output('pandoc --katex -f markdown-smart -t html doc/main.md', shell=True).decode()
+    template = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Parameter Efficient Fine Tuning</title>
+<script defer="" src="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.js"></script>
+<script>document.addEventListener("DOMContentLoaded", function () {
+var mathElements = document.getElementsByClassName("math");
+var macros = [];
+for (var i = 0; i < mathElements.length; i++) {
+var texText = mathElements[i].firstChild;
+if (mathElements[i].tagName == "SPAN") {
+katex.render(texText.data, mathElements[i], {
+displayMode: mathElements[i].classList.contains('display'),
+throwOnError: false,
+macros: macros,
+fleqn: false
+});
+}}});
+</script>
+<link rel="stylesheet"
+href="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.css" />
+{{ resources }}
+{{ script }}
+<style>
+.embed-wrapper {
+    display: flex;
+    justify-content: space-evenly;
+}
+</style>
+</head>
+<body>
+    ''' + body + '''
+</body>
+</html>
+    '''
+    resources = CDN.render()
+    scripts = []
+
+    model_options=[('google/gemma-2b', 'google/gemma-2b'), ('meta-llama/Llama-3.1-8B', 'meta-llama/Llama-3.1-8B')]
+    model_select = Select(value='google/gemma-2b', options=model_options)
+    model_filter = GroupFilter(column_name='model_name', group=model_select.value)
+    model_select.js_link('value',model_filter,'group')
+    
+    best_options=[('best', 'Best runs only'), ('True', 'All runs')]
+    best_select = Select(value='best', options=best_options)
+    best_filter = GroupFilter(column_name=best_select.value, group='True')
+    best_select.js_link('value',best_filter,'column_name')
+    
+    peft_types = ['full', 'lora', 'dora', 'tied_lora', 'strong_gamma_lora', 'partially_tied_lora', 'simple_dora', 'tensor_embedding', 'tied_lora_extra']
+    type_boxes = {}
+    peft_filts = [GroupFilter(column_name='peft_type', group=ptype) for ptype in peft_types]
+    peft_filt = UnionFilter(operands=peft_filts)
+    peft_select = MultiChoice(value=peft_types, options=peft_types)
+    peft_select.js_on_change('value', CustomJS(args=dict(peft_filts=dict(zip(peft_types, peft_filts)), peft_filt=peft_filt), 
+                                               code='peft_filt.operands = this.value.map(ptype => peft_filts[ptype])'))
+    
+    
+    # work_options=[('previous', 'Existing approaches only'), ('current', 'New approaches')]
+    # work_select = Select(value='current', options=work_options)
+    # work_filter = GroupFilter(column_name='work', group=work_select.value)
+    # work_select.js_link('value',work_filter,'group')
+    
+    filt = IntersectionFilter(operands=[model_filter, best_filter, peft_filt])
+    
+    source = ColumnDataSource(data)
+    main_plots = plot_all_runs(data, source, filt)
+    
+            # value=['best_train_loss'],options=['best_train_loss','best_test_loss','all'])
+    # mc.js_link
+    
+    script, plots = components({'main_plots' : main_plots,
+                                'model_select': model_select, 
+                                'best_select': best_select, 
+                                'peft_select' : peft_select })
+    template = Template(template)
+    html = template.render(resources=resources, script=script, **plots)
+    return html
+
 def main(prefix='.'):
     os.makedirs(f'{prefix}/runs',exist_ok=True)
     data, iterations = load_data()
-    model = plot_all_runs(data)
+    html = make_main(data)
     outf = f'{prefix}/index.html'
     print(f'writing {outf}')
     with open(outf,'w') as f:
-        f.write(file_html(model,title="Peft runs"))
+        f.write(html)
     for ix,row in data.iterrows():
         if row['diverged']:
             continue
