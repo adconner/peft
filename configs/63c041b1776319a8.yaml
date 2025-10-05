@@ -1,0 +1,17 @@
+peft_config:
+  type: tied_lora
+  r: 128
+  premult: false
+  postmult: true
+  alpha: 473.10893681135803
+  gamma: 489.83923972704264
+model_name: google/gemma-2b
+dataset_randomize: false
+seq_len: 463
+out_dir: data
+epochs: 3
+batchsize: 1
+seed: 0
+logging_steps: 250
+peak_learning_rate: 6.3983545212020835e-06
+weight_decay: 0.001

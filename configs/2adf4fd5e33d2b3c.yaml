@@ -1,0 +1,18 @@
+peft_config:
+  type: simple_dora
+  r: 8
+  transpose: false
+  eps: 1.0e-06
+  alpha: 2677.6587054613046
+  beta: 1.0
+  gamma: 489.67877925026835
+model_name: google/gemma-2b
+dataset_randomize: false
+seq_len: 463
+out_dir: data
+epochs: 3
+batchsize: 1
+seed: 0
+logging_steps: 250
+peak_learning_rate: 4.36365779403892e-06
+weight_decay: 0.001
