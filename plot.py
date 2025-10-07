@@ -1,10 +1,18 @@
+# wheel zoom
+# hide my work, show previous
+# optionally show only best of each type
+# plot emphasizing roll of gamma
+# better hover
+
+# bar charts showing performance
+
 import os
 from glob import glob
 import yaml
 import bokeh
 from bokeh.plotting import figure, show
-from bokeh.layouts import column, row
-from bokeh.transform import factor_cmap, factor_mark, linear_cmap, log_cmap
+from bokeh.layouts import column, row, grid
+from bokeh.transform import factor_cmap, factor_mark, linear_cmap, log_cmap, dodge
 from bokeh.models import HoverTool, OpenURL, TapTool, CDSView, ColumnDataSource, GroupFilter, IntersectionFilter, UnionFilter, AllIndices, Select, MultiChoice, CustomJS
 from bokeh.embed import file_html, components
 from bokeh.resources import CDN, INLINE
@@ -15,6 +23,7 @@ import numpy as np
 import math
 import subprocess
 from copy import deepcopy
+from itertools import batched
 
 def load_data(smoothing_half_life=250):
     lam = math.pow(0.5,1/smoothing_half_life)
@@ -104,7 +113,7 @@ def load_data(smoothing_half_life=250):
         data.setdefault('peak_learning_rate',[]).append(cfg['peak_learning_rate'])
         data.setdefault('alpha',[]).append(peft_cfg.get('alpha',None))
         data.setdefault('gamma',[]).append(peft_cfg.get('gamma',None))
-        previous = peft_cfg.get('gamma',1.) == 1. and (peft_cfg['type'] in ['lora','full','tied-lora'] or 
+        previous = peft_cfg.get('gamma',1.) == 1. and (peft_cfg['type'] in ['lora','full','tied_lora'] or 
                             (peft_cfg['type'] == 'dora' and not peft_cfg['transpose']))
         data.setdefault('work',[]).append('previous' if previous else 'current')
         data.setdefault('diverged',[]).append(diverged)
@@ -121,10 +130,13 @@ def load_data(smoothing_half_life=250):
 
     data, iterations = pd.DataFrame(data), pd.DataFrame(iterations)
     data['percent'] = 100. * data['peft_params'] / data['model_params']
+    center = 10000000
+    logshift, _ = np.modf(np.log2(center))
+    data['param_bin'] = np.pow(2,np.round(np.log2(data['peft_params']) - logshift) + logshift).round().astype('int')
     data['diverged_str'] = np.where(data['diverged'], 'True', 'False')
     data['True'] = 'True'
     return data, iterations
-        
+
 def plot_run(iterations, row):
     iterations = ColumnDataSource(iterations[iterations['hash'] == row['hash']])
     p = figure(title = None, background_fill_color="#fafafa", tooltips="#@iteration: @loss")
@@ -192,6 +204,60 @@ def plot_run(iterations, row):
                               template_variables={'pre_content' : 
                               f'<pre><code>{row['cfg_yaml']}</code></pre>',
                                                   'post_content' : ''})
+                              
+def best_in_bin(data):
+    best = {}
+    for param_bin in data['param_bin'].unique():
+        best.setdefault('param_bin',[]).append(param_bin)
+        best.setdefault('param_bin_str',[]).append(str(param_bin))
+        bindata = data[data['param_bin'] == param_bin]
+        for model_name in data['model_name'].unique():
+            modeldata = bindata[bindata['model_name'] == model_name]
+            for peft_type in data['peft_type'].unique():
+                typedata = modeldata[modeldata['peft_type'] == peft_type]
+                for work in data['work'].unique():
+                    workdata = typedata[typedata['work'] == work]
+                    
+                    # best.setdefault('model_name',[]).append(model_name)
+                    # best.setdefault('peft_type',[]).append(peft_type)
+                    # best.setdefault('param_bin',[]).append(param_bin)
+                    # best.setdefault('work',[]).append(work)
+                    # best.setdefault('best_train',[]).append(workdata['train_loss'].min())
+                    # best.setdefault('best_test',[]).append(workdata['test_loss'].min())
+
+                    best.setdefault(f'{model_name}_{peft_type}_{work}_train',[]).append(workdata['train_loss'].min())
+                    best.setdefault(f'{model_name}_{peft_type}_{work}_test',[]).append(workdata['test_loss'].min())
+                    
+    return pd.DataFrame(best)
+
+def plot_gamma(best):
+    ps = []
+    for model_name in ['google/gemma-2b', 'meta-llama/Llama-3.1-8B']:
+        # for kind in ['train', 'test']:
+        kind = 'train'
+        curbest = best[~best[f'{model_name}_lora_previous_{kind}'].isna()]
+        
+        bins = list(map(str,sorted(curbest['param_bin'])))
+        curbest = ColumnDataSource(data=curbest)
+        p = figure(x_range = bins, y_range = (0.,0.8), 
+                   title=f'Best {kind} loss by approach, {model_name}', height=350, toolbar_location=None, tools="")
+        p.vbar(x=dodge('param_bin_str', -.2, range=p.x_range), 
+               top=f'{model_name}_lora_previous_{kind}',
+               source=curbest, 
+               width=0.3, color='#c9d9d3', legend_label='Lora')
+        p.vbar(x=dodge('param_bin_str', .2, range=p.x_range), 
+               top=f'{model_name}_lora_current_{kind}',
+               source=curbest, 
+               width=0.3, color='#718dbf', legend_label='Lora with gamma')
+        # p.vbar(x=dodge('param_bin_str', 0.25, range=p.x_range), 
+        #        top=f'{model_name}_strong_gamma_lora_current_{kind}', 
+        #        source=curbest,
+        #        width=0.2, color='#e84d60', legend_label='Lora with strong gamma')
+        p.x_range.range_padding = 0.0
+        p.xgrid.grid_line_color = None
+        p.legend.location = "top_right"
+        ps.append(p)
+    return row(ps)
 
 def plot_all_runs(data, source=None, filt=None):
     if source is None:
@@ -241,6 +307,7 @@ def plot_all_runs(data, source=None, filt=None):
         
     # p1.legend.location="top_left"
     p1.legend.click_policy='hide'
+    p1.legend.title='Click to hide'
     
     tt = p1.select(type=TapTool)
     # tt.behavior = 'inspect'
@@ -324,13 +391,19 @@ href="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.css" />
     
     filt = IntersectionFilter(operands=[model_filter, best_filter, peft_filt])
     
+    data = data[data['peft_type'] != 'strong_gamma_lora']
     source = ColumnDataSource(data)
     main_plots = plot_all_runs(data, source, filt)
+    
+    best = best_in_bin(data)
+    gamma_plot = plot_gamma(best)
+    
     
             # value=['best_train_loss'],options=['best_train_loss','best_test_loss','all'])
     # mc.js_link
     
-    script, plots = components({'main_plots' : main_plots,
+    script, plots = components({'gamma_plot' : gamma_plot,
+                                'main_plots' : main_plots,
                                 'model_select': model_select, 
                                 'best_select': best_select, 
                                 'peft_select' : peft_select })

@@ -1,6 +1,6 @@
-# Parameter Effficient Fine Tuning Ideas
+# Parameter Efficient Fine Tuning Ideas
 
-We consider the problem of parameter efficient fine tuning. Taking inspiritaion
+We consider the problem of parameter efficient fine tuning. Taking inspiration
 from Lora, if desired, all of the ideas presented here are capable of being
 baked into the model weights, which allows for no overhead during inference for the
 fine tuned model.
@@ -9,6 +9,9 @@ In the below, losses are cross entropy per token, measured in bits. Take as a
 power of $2$ to obtain perplexity per token. My hyperparameter optimization
 target is the train loss after three epochs. I do not address the overfitting
 that therefore results, and test losses can be mostly regarded as noise.
+
+The code for this project is available in the corresponding
+[github](https://github.com/adconner/peft).
 
 ## Observation: Half of Lora parameters are trained very slowly
 
@@ -48,15 +51,15 @@ affecting the learning for $A$. In order to equalize the effective learning
 rates between $A$ and $B$, we can therefore select $\gamma$ somewhere between
 $\frac{1}{\sqrt{\alpha}}$ and $\frac{1}{\alpha}$.
 
-Plot here on only this
+{{ gamma_plot }}
 
 ## Other methods of parameter efficient fine tuning
 
 Lets explore some additional ideas for parameter efficient fine tuning. Our
 motivation is to construct schemes which potentially improve over existing
 approaches (Lora, Dora, Tied-Lora) in dimensions such as tunable parameters
-needed and capacity per parameter. Other possible impovement metrics include 
-generalization , avoiding forgetfulness, qualitative assesment of the tuned
+needed and capacity per parameter. Other possible improvement metrics include 
+generalization , avoiding forgetfulness, qualitative assessment of the tuned
 model output quality, and performance on benchmarks. For simplicity, we
 currently focus on the metrics we can observe through train loss and
 tunable parameters, and to a lesser extent test loss.
@@ -88,7 +91,7 @@ its selection of $A_i$ from $L$, obtained as $$A_i = L(w_i) =
 #### Partially Tied Lora
 
 Lets apply the partial tying to both the $A$ and $B$ factors of Lora. Let $L_A$
-and $L_B$ be $d_A$ and $d_B$ dimensional subpsaces of matrices of the same
+and $L_B$ be $d_A$ and $d_B$ dimensional subspaces of matrices of the same
 shape as $A$ and $B$ respectively, represented as tensors of shapes
 $(\ell_A,\text{in dimension},r)$, and $(\ell_B,r,\text{out dimension})$,
 respectively. Then $W_i$ is adapted as $x\to x W_i + x L_A(w_i^A) L_B(w_i^B)$,
