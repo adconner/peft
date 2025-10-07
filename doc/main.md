@@ -7,13 +7,15 @@ fine tuned model.
 
 In the below, losses are cross entropy per token, measured in bits. Take as a
 power of $2$ to obtain perplexity per token. My hyperparameter optimization
-target is the train loss after three epochs. I do not address the overfitting
-that therefore results, and test losses can be mostly regarded as noise.
+target is the train loss after three epochs. I do attempt to address the
+overfitting that results. For test losses I report the best test loss after
+each of the three epochs, which is almost always the first epoch. The dataset
+used is 'openai/gsm8k' for grade school math reasoning.
 
 The code for this project is available in the corresponding
 [github](https://github.com/adconner/peft).
 
-## Observation: Half of Lora parameters are trained very slowly
+## Problem: Half of Lora parameters are trained very slowly
 
 Lora adapts a pretrained weight matrix $W$ corresponding to dense linear layer
 $x\mapsto xW$ as $x \mapsto xW + xAB$, where $A$ and $B$ are selected with
@@ -53,7 +55,7 @@ $\frac{1}{\sqrt{\alpha}}$ and $\frac{1}{\alpha}$.
 
 {{ gamma_plot }}
 
-## Other methods of parameter efficient fine tuning
+## Can we improve on Lora?
 
 Lets explore some additional ideas for parameter efficient fine tuning. Our
 motivation is to construct schemes which potentially improve over existing
@@ -138,7 +140,7 @@ In practice, the denominator is detached to save memory during the backward pass
 Similarly factor $W = W^0 w$, where $W^0 = \frac{W}{\lVert W
 \rVert_r}$ has rows of unit length and $w = \lVert W \rVert_r$ and the
 multiplication is pointwise. Let $W^0$ be untrainable, $w$ be trainable, and
-introduce trainable $A$ and $B$ and adapt $W$ as $x\mapsto (xW + xAB) w$.
+introduce trainable $A$ and $B$ and adapt $W$ as $x\mapsto (xW^0 + xAB) w$.
 We aim to retain some power of Dora while avoiding the step of materializing
 the matrix $W+AB$ during the forward pass.
 
@@ -150,3 +152,15 @@ the matrix $W+AB$ during the forward pass.
 
 {{ main_plots }}
 
+In these tests, Simple Dora performs about the same and sometimes slightly
+better than Dora, potentially suggesting that Dora's success is essentially due
+to the magnitude direction factorization at initialization, rather than
+enforcing this property throughout training.
+
+The partial tying ideas do not seem to do better than Lora in their common
+parameter size range. Interesting to note though is they seem to have better
+test losses, perhaps suggesting more resistance to overfitting compared to
+Lora. Further work is needed to determine if this is an essential feature of
+these techniques or we are just observing that they are slower to train and
+thus slower to overfit. This effect seems stronger in LLama-3.1-8B, so it is
+reasonable to further try these techniques on larger models.
